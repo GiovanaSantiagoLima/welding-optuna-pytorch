@@ -1,0 +1,21 @@
+# Ambientes virtuais (nunca subir)
+venv/
+.venv/
+env/
+
+# Arquivos de dados (bloqueia qualquer tentativa de subir dados)
+*.csv
+data/
+
+# Cache do Python e do compilador (evita arquivos fantasmas no Git)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Arquivos de configuração do sistema e do VS Code
+.vscode/
+__pycache__/
+*.pyc
+.DS_Store
