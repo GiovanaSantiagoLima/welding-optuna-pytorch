@@ -17,7 +17,8 @@ O objetivo principal é encontrar a arquitetura de rede e os hiperparâmetros id
 * **Visualização de Resultados:** Geração de gráficos de importância de hiperparâmetros e histórico de otimização.
   
 ---
-##Estrutura do Projeto 
+## Estrutura do Projeto 
+
 ├── data/               # Datasets de soldagem (CSVs, etc.)
 ├── models/             # Checkpoints dos melhores modelos salvos
 ├── notebooks/          # Notebooks Jupyer para análise exploratória
