@@ -18,7 +18,7 @@ O objetivo principal é encontrar a arquitetura de rede e os hiperparâmetros id
   
 ---
 ## Estrutura do Projeto 
-
+```text
 ├── data/               # Datasets de soldagem (CSVs, etc.)
 ├── models/             # Checkpoints dos melhores modelos salvos
 ├── notebooks/          # Notebooks Jupyer para análise exploratória
