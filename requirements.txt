@@ -4,3 +4,5 @@ torch
 scikit-learn
 category-encoders
 optuna
+onnxscript 
+onnx
