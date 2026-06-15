@@ -1,10 +1,12 @@
+#Bibliotecas Utilizadas
 import re
 import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, OneHotEncoder, OrdinalEncoder
-
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
 
 #Funções auxiliares para limpeza e tratamento dos dados
 def limpar_vazao(val):
@@ -75,27 +77,58 @@ def limpeza(df_bruto: pd.DataFrame) -> pd.DataFrame:
     ]
     passes = {
         'raiz': {
-            'processo': 'raiz_processo', 'classificacao': 'raiz_classificacao', 'diametro': 'raiz_diametro',
-            'polaridade': 'raiz_polaridade', 'limpeza': 'raiz_limpeza', 'voltagem': 'raiz_voltagem',
-            'amperagem': 'raiz_amperagem', 'velocidade_de_soldagem': 'raiz_vel_soldagem',
-            'tipo_gas_tocha': 'tipo_gas_tocha_raiz', 'vazao_gas_tocha': 'vazao_gas_tocha_raiz',
-            'tipo_gas_purga': 'tipo_gas_purga_raiz', 'vazao_gas_purga': 'vazao_gas_purga_raiz'
-        },
+        'processo': 'raiz_processo',
+        'classificacao': 'raiz_classificacao',
+        'diametro': 'raiz_diametro',
+        'polaridade': 'raiz_polaridade',
+        'limpeza': 'raiz_limpeza', 
+        'voltagem': 'raiz_voltagem',
+        'amperagem': 'raiz_amperagem',
+        'velocidade_de_soldagem': 'raiz_vel_soldagem',
+        'tipo_gas_tocha': 'tipo_gas_tocha_raiz',
+        'vazao_gas_tocha': 'vazao_gas_tocha_raiz',
+        'pureza_gas_tocha': 'pureza_gas_tocha_raiz',       
+        'tipo_gas_purga': 'tipo_gas_purga_raiz',
+        'vazao_gas_purga': 'vazao_gas_purga_raiz',
+        'pureza_gas_purga': 'pureza_gas_purga_raiz'        
+    },
+
         'enchimento': {
-            'processo': 'enchimento_processo', 'classificacao': 'enchimento_classificacao', 'diametro': 'enchimento_diametro',
-            'polaridade': 'enchimento_polaridade', 'limpeza': 'enchimento_limpeza', 'voltagem': 'enchimento_voltagem',
-            'amperagem': 'enchimento_amperagem', 'velocidade_de_soldagem': 'enchimento_vel_soldagem',
-            'tipo_gas_tocha': 'tipo_gas_tocha_acabamento', 'vazao_gas_tocha': 'vazao_gas_tocha_acabamento',
-            'tipo_gas_purga': 'tipo_gas_purga_acabamento', 'vazao_gas_purga': 'vazao_gas_purga_acabamento'
-        },
+        'processo': 'enchimento_processo',
+        'classificacao': 'enchimento_classificacao',
+        'diametro': 'enchimento_diametro',
+        'polaridade': 'enchimento_polaridade',
+        'limpeza': 'enchimento_limpeza',
+        'voltagem': 'enchimento_voltagem',
+        'amperagem': 'enchimento_amperagem',
+        'velocidade_de_soldagem': 'enchimento_vel_soldagem',
+        'tipo_gas_tocha': 'tipo_gas_tocha_acabamento',     # Herda do acabamento
+        'vazao_gas_tocha': 'vazao_gas_tocha_acabamento',   # Herda do acabamento
+        'pureza_gas_tocha': 'pureza_gas_tocha_acabamento', # Herda do acabamento
+        'tipo_gas_purga': 'tipo_gas_purga_acabamento',     # Herda do acabamento
+        'vazao_gas_purga': 'vazao_gas_purga_acabamento',   # Herda do acabamento
+        'pureza_gas_purga': 'pureza_gas_purga_acabamento'   # Herda do acabamento
+    },
+
         'acabamento': {
-            'processo': 'acabamento_processo', 'classificacao': 'acabamento_classificacao', 'diametro': 'acabamento_diametro',
-            'polaridade': 'acabamento_polaridade', 'limpeza': 'acabamento_limpeza', 'voltagem': 'acabamento_voltagem',
-            'amperagem': 'acabamento_amperagem', 'velocidade_de_soldagem': 'acabamento_vel_soldagem',
-            'tipo_gas_tocha': 'tipo_gas_tocha_acabamento', 'vazao_gas_tocha': 'vazao_gas_tocha_acabamento',
-            'tipo_gas_purga': 'tipo_gas_purga_acabamento', 'vazao_gas_purga': 'vazao_gas_purga_acabamento'
-        }
+        'processo': 'acabamento_processo',
+        'classificacao': 'acabamento_classificacao',
+        'diametro': 'acabamento_diametro',
+        'polaridade': 'acabamento_polaridade',
+        'limpeza': 'acabamento_limpeza',
+        'voltagem': 'acabamento_voltagem',
+        'amperagem': 'acabamento_amperagem',    
+        'velocidade_de_soldagem': 'acabamento_vel_soldagem',
+        'tipo_gas_tocha': 'tipo_gas_tocha_acabamento',
+        'vazao_gas_tocha': 'vazao_gas_tocha_acabamento',
+        'pureza_gas_tocha': 'pureza_gas_tocha_acabamento', 
+        'tipo_gas_purga': 'tipo_gas_purga_acabamento',
+        'vazao_gas_purga': 'vazao_gas_purga_acabamento',
+        'pureza_gas_purga': 'pureza_gas_purga_acabamento'  
     }
+}
+
+# Unificação das tabelas por tipo de passe
     dfs = []
     for passe, cols in passes.items():
         temp = df[colunas_comuns].copy()
@@ -110,8 +143,10 @@ def limpeza(df_bruto: pd.DataFrame) -> pd.DataFrame:
         temp['velocidade_de_soldagem'] = df[cols['velocidade_de_soldagem']]
         temp['tipo_gas_tocha'] = df[cols['tipo_gas_tocha']]
         temp['vazao_gas_tocha'] = df[cols['vazao_gas_tocha']]
-        temp['tipo_gas_purga'] = df[cols['tipo_gas_purga']]
-        temp['vazao_gas_purga'] = df[cols['vazao_gas_purga']]
+        temp['pureza_gas_tocha'] = df[cols['pureza_gas_tocha']]   # Mapeado para o DataFrame unificado
+        temp['tipo_gas_purga'] = df[cols['tipo_gas_purga']] 
+        temp['vazao_gas_purga'] = df[cols['vazao_gas_purga']] 
+        temp['pureza_gas_purga'] = df[cols['pureza_gas_purga']]   # Mapeado para o DataFrame unificado
         dfs.append(temp)
         
     dados = pd.concat(dfs, ignore_index=True)
@@ -128,15 +163,11 @@ def limpeza(df_bruto: pd.DataFrame) -> pd.DataFrame:
     dados['cobre_junta'] = dados['cobre_junta'].fillna('Informação Desconhecida')
     dados['vazao_gas_purga'] = dados['vazao_gas_purga'].apply(limpar_vazao)
     dados['vazao_gas_tocha'] = dados['vazao_gas_tocha'].apply(limpar_vazao)
+    dados['pureza_gas_tocha'] = dados['pureza_gas_tocha'].fillna('Sem Gás')
+    dados['pureza_gas_purga'] = dados['pureza_gas_purga'].fillna('Sem Gás')
     dados['pre_aquecimento'] = dados['pre_aquecimento'].fillna(25.0)
-    dados['temperatura_interpasse'] = dados['temperatura_interpasse'].fillna(25.0) # media 
-    for col in ['nariz', 'abertura_raiz', 'angulo']: #drop linha
-        dados[col] = dados[col].fillna(0.0)
-    dados['diametro_arame'] = dados['diametro_arame'] #drop 
-    dados['pnumber'] = dados['pnumber'].fillna('Não Informado').astype(str) #- preencher 
-    dados['posicao_peca'] = dados['posicao_peca'].fillna('Não Informado').astype(str)
-    dados['espessura'] = dados['espessura'].fillna(dados['espessura'].median()) #- dropar
-    dados = dados.dropna(subset=['voltagem', 'amperagem', 'velocidade_de_soldagem'])
+    colunas_criticas = ['voltagem', 'amperagem', 'velocidade_de_soldagem','nariz', 'abertura_raiz', 'angulo','diametro_arame', 'espessura']
+    dados = dados.dropna(subset=colunas_criticas)
     
    
     # 3. TRATAMENTO TEXTUAL DOS DADOS
@@ -167,58 +198,65 @@ def limpeza(df_bruto: pd.DataFrame) -> pd.DataFrame:
     dados['posicao_peca'] = dados.apply(ajustar_posicao, axis=1)
     dados['posicao_peca'] = dados['posicao_peca'].fillna("Informação Desconhecida")
     dados['polaridade'] = dados['polaridade'].replace('NAN', 'Informação Desconhecida')
+   
     for gas_col in ['tipo_gas_tocha', 'tipo_gas_purga']:
         dados[gas_col] = dados[gas_col].replace('NAN', 'Sem Gás')
-        
-    # 4. TRATAMENTO E CONVERSÃO DOS ALVOS (TARGETS)
-    dados['amperagem'] = pd.to_numeric(dados['amperagem'].astype(str).str.replace(',', '.'), errors='coerce')
-    dados['velocidade_de_soldagem'] = pd.to_numeric(dados['velocidade_de_soldagem'], errors='coerce')
-    dados['voltagem'] = pd.to_numeric(dados['voltagem'], errors='coerce')
-    
-    if 478 in dados.index: #CORRIGIR no dataframe 
-        dados.loc[478, 'amperagem'] = 179.0    
 
+#Pré Processamento dos gases    
+def preprocessar_dados_gases(dados):
+    dados = dados.copy()
+    gases = ["AR", "CO2", "O2", "N2"]
+
+    def processar_gas(row, pref):
+        tipo, pureza = (str(row[f"tipo_gas_{pref}"]), str(row[f"pureza_gas_{pref}"]))
+        res = {f"{pref}_{g}": 0.0 for g in gases}
+        res[f"{pref}_SemGas"] = int("Sem Gás" in tipo or tipo in ["0", "nan"])
+        gases_f = re.findall(r"AR|CO2|O2|N2", tipo)
+        numeros_f = [float(n) for n in re.findall(r"\d+\.?\d*", pureza)]
+        for g, v in zip(gases_f, numeros_f):
+            res[f"{pref}_{g}"] = v
+        return pd.Series(res)
+    
+    for p in ["tocha", "purga"]:
+        dados = dados.join(dados.apply(processar_gas, axis=1, args=(p,)))
+    dados = dados.drop(columns=["tipo_gas_tocha","pureza_gas_tocha","tipo_gas_purga","pureza_gas_purga"], errors="ignore")
+    cols_gases = [f"{p}_{g}" for p in ["tocha", "purga"] for g in gases + ["SemGas"]]
+    outras_cols = [c for c in dados.columns if c not in cols_gases]
+    dados = dados[outras_cols + cols_gases]
     return dados
 
-def preparar_gases(dados):
-    gases = ['AR', 'CO2', 'O2', 'N2']
-    for gas in gases:
-        dados[f'tocha_{gas}'] = dados['tipo_gas_tocha'].str.contains(gas, na=False).astype(int)
-        dados[f'purga_{gas}'] = dados['tipo_gas_purga'].str.contains(gas, na=False).astype(int)
-    dados['tocha_SemGas'] = (dados['tipo_gas_tocha'] == 'Sem Gás').astype(int)
-    dados['purga_SemGas'] = (dados['tipo_gas_purga'] == 'Sem Gás').astype(int)
-    return dados.drop(columns=['tipo_gas_tocha', 'tipo_gas_purga'])
-
 def preparar_dados(dados):
-    df = dados.copy()
+    df = preprocessar_dados_gases(dados)
     target_cols = ['voltagem', 'amperagem', 'velocidade_de_soldagem']
     X = df.drop(columns=target_cols)
     y = df[target_cols]
 
-    # FEATURES NUMÉRICAS
-    features_numericas = ['espessura','diametro_base','angulo','nariz','abertura_raiz','pre_aquecimento','temperatura_interpasse','diametro_arame','vazao_gas_tocha','vazao_gas_purga' ]
+    features_numericas = ['espessura','diametro_base','angulo','nariz','abertura_raiz','pre_aquecimento','temperatura_interpasse','diametro_arame','vazao_gas_tocha','vazao_gas_purga']
+    features_onehot = ['tipo_peca', 'passe', 'goivagem', 'cobre_junta','polaridade', 'progressao', 'processo','normas_referencia', 'tipo_chanfro','posicao_peca', 'limpeza', 'pnumber']
+    features_materiais = ['material_base','material_adicao'] # Alta cardinalidade
 
-    # FEATURES CATEGÓRICAS
-    features_onehot = ['tipo_peca', 'passe', 'goivagem', 'cobre_junta','polaridade', 'progressao', 'processo','normas_referencia', 'tipo_chanfro','posicao_peca', 'limpeza', 'pnumber' ]
-    features_embedding = ['material_base','material_adicao']
-    colunas_gas = ['tocha_AR', 'purga_AR', 'tocha_CO2', 'purga_CO2', 'tocha_O2', 'purga_O2', 'tocha_N2','purga_N2', 'tocha_SemGas', 'purga_SemGas']
-    categoricas = features_onehot + features_embedding + colunas_gas
-    for col in features_onehot + features_embedding:
-        if col in X.columns:
-            X[col] = X[col].astype(str)
+    # PIPELINES
+    pipeline_numerica = Pipeline([
+        ('imputer', SimpleImputer(strategy='median')), 
+        ('scaler', StandardScaler())
+    ])
+    
+    pipeline_categorica = OneHotEncoder(handle_unknown='ignore', sparse_output=False)
+    pipeline_materiais = OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1)
 
-    # SPLIT
-    X_train, X_test, y_train, y_test = train_test_split(X, y,test_size=0.2,random_state=42)
-
-    # PREPROCESSADOR
+    # PREPROCESSADOR UNIFICADO
     preprocessor = ColumnTransformer(
         transformers=[
-            ('num', StandardScaler(), features_numericas),
-            ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False), features_onehot),
-            ('embed', OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1), features_embedding)
+            ('num', pipeline_numerica, features_numericas),
+            ('onehot', pipeline_categorica, features_onehot),
+            ('mat', pipeline_materiais, features_materiais)
         ],
+        remainder='passthrough'
     )
-    # TRANSFORMAÇÃO
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
     X_train_enc = preprocessor.fit_transform(X_train)
     X_test_enc = preprocessor.transform(X_test)
-    return (X_train_enc,X_test_enc, y_train.values, y_test.values,features_numericas,categoricas,preprocessor)
+
+    return X_train_enc, X_test_enc, y_train.values, y_test.values, preprocessor
