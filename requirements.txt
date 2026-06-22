@@ -1,3 +1,6 @@
+dotenv
+matplotlib
+seaborn
 numpy
 pandas
 torch

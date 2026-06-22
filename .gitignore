@@ -2,6 +2,7 @@
 venv/
 .venv/
 env/
+.env/
 
 # Arquivos de dados (bloqueia qualquer tentativa de subir dados)
 *.csv
