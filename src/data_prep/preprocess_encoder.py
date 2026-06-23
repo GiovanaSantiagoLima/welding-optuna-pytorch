@@ -3,6 +3,8 @@ import joblib
 import os
 import pandas as pd
 import numpy as np
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
@@ -50,7 +52,7 @@ def preprocessar_encoder(df: pd.DataFrame) -> pd.DataFrame:
     preprocessor = ColumnTransformer(   
         transformers=[
             ('num', StandardScaler(), features_numericas),
-            ('gases', 'passthrough', features_gases), 
+            ('gases', Pipeline([('imputer', SimpleImputer(strategy='constant', fill_value=0.0)),]), features_gases),
             ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False), features_onehot)
         ],
         remainder='drop') 
@@ -139,7 +141,7 @@ def salvar_dados_como_tensores(resultados_preprocessamento: tuple, nome_base_arq
     print(f"   -> {caminho_maps}")
 
 def main()-> None:
-    caminho_dados = 'data/dados_preprocessados.csv' 
+    caminho_dados = 'data/raw/dados_preprocessados.csv' 
     print(f"Iniciando o processamento do arquivo: {caminho_dados}")
     
     try:

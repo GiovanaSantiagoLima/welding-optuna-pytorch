@@ -130,6 +130,7 @@ def preencher_nulos(df: pd.DataFrame) -> pd.DataFrame:
     df['pureza_gas_purga'] = df['pureza_gas_purga'].fillna('Sem Gás')
     df["polaridade"] = df["polaridade"].replace("NAN", "Informação Desconhecida")
     df['pre_aquecimento'] = df['pre_aquecimento'].fillna(25.0)
+    df['temperatura_interpasse'] = df['temperatura_interpasse'].fillna(df['temperatura_interpasse'].mean()) 
     for gas_col in ['tipo_gas_tocha', 'tipo_gas_purga']:
         df[gas_col] = df[gas_col].replace('NAN', 'Sem Gás')
     return df
@@ -219,7 +220,7 @@ def preprocessar_dados_gases(df: pd.DataFrame) -> pd.DataFrame:
         gases_encontrados = re.findall(r"AR|CO2|O2|N2", tipo)
         valores = [float(n) for n in re.findall(r"\d+\.?\d*", pureza)]
         for g in gases:
-            res[f"{pref}_{g}"] = np.nan
+            res[f"{pref}_{g}"] = 0
             res[f"{pref}_{g}_presente"] = 0
         for g, v in zip(gases_encontrados, valores):
             res[f"{pref}_{g}"] = v
@@ -234,7 +235,7 @@ def preprocessar_dados_gases(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def main():
-    nome_arquivo = 'data/dados_reestruturados.csv'
+    nome_arquivo = 'data/raw/dados_reestruturados.csv'
     print(f"Carregando os dados do arquivo: {nome_arquivo}...")
     try:
         df = pd.read_csv(nome_arquivo, sep=';') 
