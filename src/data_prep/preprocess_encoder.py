@@ -44,6 +44,10 @@ def preprocessar_encoder(df: pd.DataFrame) -> pd.DataFrame:
     y = df[target_cols]
     
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    y_scaler = StandardScaler()
+    y_train_scaled = y_scaler.fit_transform(y_train)
+    y_test_scaled = y_scaler.transform(y_test)
     
     features_numericas = ['espessura', 'diametro_base', 'angulo', 'nariz', 'abertura_raiz', 'pre_aquecimento', 'temperatura_interpasse', 'diametro_arame', 'vazao_gas_tocha', 'vazao_gas_purga']
     features_gases = ["tocha_AR", "tocha_CO2", "tocha_O2", "tocha_N2", "tocha_SemGas","purga_AR", "purga_CO2", "purga_O2", "purga_N2", "purga_SemGas"]
@@ -91,8 +95,8 @@ def preprocessar_encoder(df: pd.DataFrame) -> pd.DataFrame:
         X_train_num_cat, X_test_num_cat, 
         X_train_emb_base, X_test_emb_base, 
         X_train_emb_add, X_test_emb_add, 
-        y_train.values, y_test.values, 
-        preprocessor, mappings)
+        y_train_scaled, y_test_scaled, 
+        preprocessor, mappings, y_scaler)
 
 def salvar_dados_como_tensores(resultados_preprocessamento: tuple, nome_base_arquivo: str = 'dados_soldagem') -> None:
     """
@@ -110,7 +114,7 @@ def salvar_dados_como_tensores(resultados_preprocessamento: tuple, nome_base_arq
               - {nome_base_arquivo}_mappings.joblib (Dicionário de mapeamentos e vocabulário)
     """
     
-    (X_train_num_cat, X_test_num_cat, X_train_emb_base, X_test_emb_base, X_train_emb_add, X_test_emb_add, y_train, y_test, preprocessor, mappings) = resultados_preprocessamento
+    (X_train_num_cat, X_test_num_cat, X_train_emb_base, X_test_emb_base, X_train_emb_add, X_test_emb_add, y_train, y_test, preprocessor, mappings, y_scaler) = resultados_preprocessamento
 
     #Convertendo para tensores    
     X_train_num_tensor = torch.tensor(X_train_num_cat, dtype=torch.float32)
@@ -132,13 +136,16 @@ def salvar_dados_como_tensores(resultados_preprocessamento: tuple, nome_base_arq
     # Salva os objetos utilitários usando joblib 
     caminho_prep = f"{nome_base_arquivo}_preprocessor.joblib"
     caminho_maps = f"{nome_base_arquivo}_mappings.joblib"
+    caminho_yscaler = f"{nome_base_arquivo}_yscaler.joblib"
     joblib.dump(preprocessor, caminho_prep)
     joblib.dump(mappings, caminho_maps)
+    joblib.dump(y_scaler, caminho_yscaler)
     
     print(f"\n✅ Concluído! Arquivos gerados com sucesso:")
     print(f"   -> {caminho_tensores}")
     print(f"   -> {caminho_prep}")
     print(f"   -> {caminho_maps}")
+    print(f"   -> {caminho_yscaler}")
 
 def main()-> None:
     caminho_dados = 'data/raw/dados_preprocessados.csv' 
@@ -156,6 +163,5 @@ def main()-> None:
     except Exception as e:
         print(f"❌ Ocorreu um erro durante a execução: {e}")
 
-# Ponto de entrada padrão do Python
 if __name__ == "__main__":
     main()
