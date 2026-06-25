@@ -148,7 +148,7 @@ def salvar_dados_como_tensores(resultados_preprocessamento: tuple, nome_base_arq
     print(f"   -> {caminho_yscaler}")
 
 def main()-> None:
-    caminho_dados = 'data/raw/dados_preprocessados.csv' 
+    caminho_dados = 'data/processed/dados_preprocessados.csv' 
     print(f"Iniciando o processamento do arquivo: {caminho_dados}")
     
     try:

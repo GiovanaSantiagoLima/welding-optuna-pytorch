@@ -235,7 +235,7 @@ def preprocessar_dados_gases(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def main():
-    nome_arquivo = 'data/raw/dados_reestruturados.csv'
+    nome_arquivo = 'data/processed/dados_reestruturados.csv'
     print(f"Carregando os dados do arquivo: {nome_arquivo}...")
     try:
         df = pd.read_csv(nome_arquivo, sep=';') 
