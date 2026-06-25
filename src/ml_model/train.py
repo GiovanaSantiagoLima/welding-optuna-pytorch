@@ -1,207 +1,266 @@
 import os
-import numpy as np
-import pandas as pd
+import copy
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import optuna
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from pre_processamento import limpeza 
+import numpy as np
+from dataset import criar_dataloaders
+from model import RedeSoldagem
 
-optuna.logging.set_verbosity(optuna.logging.WARNING)
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+OUTPUT_NAMES = ["voltagem", "amperagem", "velocidade"]
 
-# =====================================================================
-# 1. ARQUITETURA DA REDE NEURAL (SIMPLIFICADA E MULTI-OUTPUT)
-# =====================================================================
-class AvançadoMLP(nn.Module):
+
+def calcular_metricas(preds: torch.Tensor, targets: torch.Tensor) -> dict:
     """
-    Uma rede MLP pura e robusta. Deixando o tratamento de categóricos 
-    para o pré-processamento, a rede processa a matriz final de forma direta e rápida.
+    Calcula MSE, MAE e R² global e por output (voltagem, amperagem, velocidade).
+
+    preds / targets : (N, 3)
+    Retorna dict com chaves:
+        mse, mae, r2                          ← média global
+        mse_voltagem, mae_voltagem, r2_voltagem
+        mse_amperagem, mae_amperagem, r2_amperagem
+        mse_velocidade, mae_velocidade, r2_velocidade
     """
-    def __init__(self, input_dim, output_dim, hidden_layers, activation_name, dropout_rate, use_batchnorm):
-        super().__init__()
-        
-        layers = []
-        prev_dim = input_dim
-        
-        activations = {
-            "relu": nn.ReLU(), "gelu": nn.GELU(), "silu": nn.SiLU(), "mish": nn.Mish()
-        }
-        activation = activations[activation_name]
+    result = {}
 
-        for hidden_dim in hidden_layers:
-            layers.append(nn.Linear(prev_dim, hidden_dim))
-            if use_batchnorm:
-                layers.append(nn.BatchNorm1d(hidden_dim))
-            layers.append(activation)
-            if dropout_rate > 0:
-                layers.append(nn.Dropout(dropout_rate))
-            prev_dim = hidden_dim
+    for i, nome in enumerate(OUTPUT_NAMES):
+        p = preds[:, i]
+        t = targets[:, i]
+        mse = float(nn.functional.mse_loss(p, t).item())
+        mae = float(nn.functional.l1_loss(p, t).item())
+        ss_res = float(((t - p) ** 2).sum().item())
+        ss_tot = float(((t - t.mean()) ** 2).sum().item())
+        r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+        result[f"mse_{nome}"] = mse
+        result[f"mae_{nome}"] = mae
+        result[f"r2_{nome}"]  = r2
 
-        layers.append(nn.Linear(prev_dim, output_dim))
-        self.network = nn.Sequential(*layers)
+    # — Global (média dos 3 outputs) —
+    result["mse"] = float(np.mean([result[f"mse_{n}"] for n in OUTPUT_NAMES]))
+    result["mae"] = float(np.mean([result[f"mae_{n}"] for n in OUTPUT_NAMES]))
+    result["r2"]  = float(np.mean([result[f"r2_{n}"]  for n in OUTPUT_NAMES]))
 
-    def forward(self, x):
-        return self.network(x)
+    return result
 
-# =====================================================================
-# 2. ROTINAS AUXILIARES DE TREINO E PREDIÇÃO
-# =====================================================================
-def treinar_modelo_pytorch(X_train, y_train, X_val, y_val, params, input_dim, output_dim, trial=None):
-    hidden_dims = [int(x) for x in params["hidden_layers"].split(",")]
-    
-    model = AvançadoMLP(
-        input_dim=input_dim, output_dim=output_dim, hidden_layers=hidden_dims,
-        activation_name=params["activation_name"], dropout_rate=params["dropout_rate"],
-        use_batchnorm=params["use_batchnorm"]
-    ).to(device)
 
-    criterion = nn.MSELoss()
-    optimizer = optim.AdamW(model.parameters(), lr=params["learning_rate"], weight_decay=params["weight_decay"]) \
-                if params["optimizer_name"] == "adamw" else \
-                optim.Adam(model.parameters(), lr=params["learning_rate"], weight_decay=params["weight_decay"])
-
-    # Conversão eficiente para Tensores
-    X_tr, y_tr = torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.float32)
-    X_v, y_v = torch.tensor(X_val, dtype=torch.float32).to(device), torch.tensor(y_val, dtype=torch.float32).to(device)
-    
-    dataset = torch.utils.data.TensorDataset(X_tr, y_tr)
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=int(params["batch_size"]), shuffle=True)
-
-    for epoch in range(int(params["num_epochs"])):
-        model.train()
-        for batch_X, batch_y in dataloader:
-            batch_X, batch_y = batch_X.to(device), batch_y.to(device)
-            optimizer.zero_grad()
-            loss = criterion(model(batch_X), batch_y)
-            loss.backward()
-            optimizer.step()
-        
-        # Poda do Optuna (Pruning) para economizar tempo em treinos ruins
-        if trial is not None:
-            model.eval()
-            with torch.no_grad():
-                val_loss = criterion(model(X_v), y_v).item()
-            trial.report(val_loss, epoch)
-            if trial.should_prune():
-                raise optuna.TrialPruned()
-                
-    return model
-
-def prever_modelo_pytorch(model, X):
-    model.eval()
-    X_tensor = torch.tensor(X, dtype=torch.float32).to(device)
-    with torch.no_grad():
-        preds = model(X_tensor).cpu().numpy()
-    return preds
-
-# =====================================================================
-# 3. EXPORTAÇÃO EXCELENTE PARA ONNX
-# =====================================================================
-def exportar_para_onnx(pytorch_model, input_dim, nome_arquivo="melhor_modelo.onnx"):
-    pytorch_model.eval()
-    dummy_input = torch.randn(1, input_dim, device=device)
-    torch.onnx.export(
-        pytorch_model, dummy_input, nome_arquivo,
-        export_params=True, opset_version=18, do_constant_folding=True,
-        input_names=['input'], output_names=['output'],
-        dynamic_axes={'input': {0: 'batch_size'}, 'output': {0: 'batch_size'}}
+def imprimir_metricas(metricas: dict, prefixo: str = "") -> None:
+    """Imprime um bloco formatado com todas as métricas."""
+    sep = "─" * 54
+    print(f"\n{prefixo}{sep}")
+    print(f"{prefixo}{'':>20}  {'MSE':>8}  {'MAE':>8}  {'R²':>7}")
+    print(f"{prefixo}{sep}")
+    for nome in OUTPUT_NAMES:
+        print(
+            f"{prefixo}  {nome:<18}"
+            f"  {metricas[f'mse_{nome}']:>8.4f}"
+            f"  {metricas[f'mae_{nome}']:>8.4f}"
+            f"  {metricas[f'r2_{nome}']:>7.4f}"
+        )
+    print(f"{prefixo}{sep}")
+    print(
+        f"{prefixo}  {'GERAL':<18}"
+        f"  {metricas['mse']:>8.4f}"
+        f"  {metricas['mae']:>8.4f}"
+        f"  {metricas['r2']:>7.4f}"
     )
-    return nome_arquivo
+    print(f"{prefixo}{sep}\n")
 
-# =====================================================================
-# 4. PIPELINE PRINCIPAL (TRAIN)
-# =====================================================================
-def train(df_limpo):
-    print(f"Dispositivo de processamento: {device}")
+
+def treinar(params: dict, data_path: str, epochs: int = 100, patience: int = 10, device: str | None = None, onnx_path: str = "melhor_modelo.onnx") -> dict: 
+    """
+    Treina o RedeSoldagem com os hiperparâmetros fornecidos e exporta para ONNX.
+
+    Parâmetros
+    ----------
+    params : dict
+        Hiperparâmetros do modelo e do otimizador. Esperados:
+            - emb_dim           (int)
+            - hidden_size       (int)
+            - num_layers        (int)
+            - dropout_rate      (float)
+            - learning_rate     (float)
+            - batch_size        (int)
+            - weight_decay      (float)   ← opcional, default 1e-4
+            - optimizer         (str)     ← 'Adam' | 'AdamW' | 'SGD' | 'RMSprop', default 'AdamW'
+            - activation        (str)     ← 'relu' | 'gelu' | 'silu', default 'relu'
+            - criterion         (str)     ← 'MSELoss' | 'L1Loss' | 'HuberLoss', default 'MSELoss'
+
+    data_path : str
+        Caminho para o arquivo .pt com os tensores pré-processados.
+    epochs : int
+        Número máximo de épocas.
+    patience : int
+        Épocas sem melhora antes de parar (early stopping).
+    device : str | None
+        'cuda', 'cpu', ou None para detecção automática.
+
+    Retorna
+    -------
+    dict com métricas globais e por output:
+        best_val_mse, best_val_mae, best_val_r2
+        best_val_mse_voltagem,  best_val_mae_voltagem,  best_val_r2_voltagem
+        best_val_mse_amperagem, best_val_mae_amperagem, best_val_r2_amperagem
+        best_val_mse_velocidade,best_val_mae_velocidade,best_val_r2_velocidade
+        stopped_epoch, hist_train, hist_val
+    """
+
+    # Dispositivo
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    dev = torch.device(device)
+    print(f"[train] Dispositivo: {dev}")
+
+    # DataLoaders
+    batch_size = params.get("batch_size", 32)
+    loader_treino, loader_val = criar_dataloaders(data_path, batch_size=batch_size)
+    (x_num, x_base, x_add), _ = next(iter(loader_treino))
+    num_features = x_num.shape[1]
+    dados = torch.load(data_path, weights_only=True)
+    vocab_base = int(dados["X_train_emb_base"].max().item() + 1)
+    vocab_add  = int(dados["X_train_emb_add"].max().item() + 1)
+
+    # Modelo
+    modelo = RedeSoldagem(
+        num_features_continuas=num_features,
+        vocab_base_size=vocab_base,
+        vocab_add_size=vocab_add,
+        emb_dim=params["emb_dim"],
+        hidden_size=params["hidden_size"],
+        num_layers=params["num_layers"],
+        dropout_rate=params["dropout_rate"],
+    ).to(dev)
+
+    # Otimizador
+    opt_name = params.get("optimizer", "AdamW")
+    if opt_name == "AdamW":
+        optimizer = optim.AdamW(modelo.parameters(), lr=params["learning_rate"], weight_decay=params["weight_decay"])
+    elif opt_name == "Adam":
+        optimizer = optim.Adam(modelo.parameters(), lr=params["learning_rate"], weight_decay=params["weight_decay"])
+    elif opt_name == "SGD":
+        optimizer = optim.SGD(modelo.parameters(), lr=params["learning_rate"], weight_decay=params["weight_decay"])
+    elif opt_name == "RMSprop":
+        optimizer = optim.RMSprop(modelo.parameters(), lr=params["learning_rate"], weight_decay=params["weight_decay"])
+
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=max(5, patience // 4))
+
+    # Critério
+    criterion_name = params.get("criterion", "MSELoss")
+    if criterion_name == "MSELoss":
+        criterion = nn.MSELoss()
+    elif criterion_name == "HuberLoss":
+        criterion = nn.HuberLoss()
+    elif criterion_name == "L1Loss":
+        criterion = nn.L1Loss()
+
+    # Loop de treino
+    hist_train: list[float] = []
+    hist_val:   list[float] = []
+
+    best_val_mse       = float("inf")
+    best_metricas      = None
+    epochs_sem_melhora = 0
+    stopped_epoch      = epochs
+
+    for epoca in range(1, epochs + 1):
+        # — Treino —
+        modelo.train()
+        losses_batch = []
+        for (x_num, x_base, x_add), y_batch in loader_treino:
+            x_num   = x_num.to(dev)
+            x_base  = x_base.to(dev)
+            x_add   = x_add.to(dev)
+            y_batch = y_batch.to(dev)
+
+            optimizer.zero_grad()
+            pred = modelo(x_num, x_base, x_add)
+            loss = criterion(pred, y_batch)
+            loss.backward()
+            nn.utils.clip_grad_norm_(modelo.parameters(), max_norm=1.0)
+            optimizer.step()
+            losses_batch.append(loss.item())
+
+        train_loss = float(np.mean(losses_batch))
+        hist_train.append(train_loss)
+
+        # — Validação —
+        modelo.eval()
+        all_preds   = []
+        all_targets = []
+        with torch.no_grad():
+            for (x_num, x_base, x_add), y_batch in loader_val:
+                x_num   = x_num.to(dev)
+                x_base  = x_base.to(dev)
+                x_add   = x_add.to(dev)
+                y_batch = y_batch.to(dev)
+                all_preds.append(modelo(x_num, x_base, x_add))
+                all_targets.append(y_batch)
+
+        all_preds   = torch.cat(all_preds)
+        all_targets = torch.cat(all_targets)
+        metricas    = calcular_metricas(all_preds, all_targets)
+
+        hist_val.append(metricas["mse"])
+        scheduler.step(metricas["mse"])
+
+        # — Log a cada 10 épocas —
+        if epoca % 10 == 0:
+            lr_atual = optimizer.param_groups[0]["lr"]
+            print(
+                f"  Época {epoca:>4}/{epochs} | "
+                f"Train Loss: {train_loss:.4f} | "
+                f"Val MSE: {metricas['mse']:.4f} | "
+                f"Val MAE: {metricas['mae']:.4f} | "
+                f"Val R²: {metricas['r2']:.4f} | "
+                f"LR: {lr_atual:.2e}"
+            )
+
+        # — Early stopping (baseado no MSE global de validação) —
+        if metricas["mse"] < best_val_mse:
+            best_val_mse  = metricas["mse"]
+            best_metricas = metricas
+            best_model_weights = copy.deepcopy(modelo.state_dict()) 
+            epochs_sem_melhora = 0
+        else:
+            epochs_sem_melhora += 1
+            if epochs_sem_melhora >= patience:
+                print(f"  Early stopping na época {epoca}.")
+                stopped_epoch = epoca
+                break
+
+    # — Relatório final —
+    print(f"\n{'=' * 54}")
+    print(f"  MÉTRICAS FINAIS DE VALIDAÇÃO (melhor época)")
     
-    # ⚠️ Nota: Idealmente, a função preparar_dados_com_mapping deve aplicar OneHotEncoder ou OrdinalEncoder
-    X_train_final, X_test_final, y_train, y_test, _ = preparar_dados(df_limpo)
+    imprimir_metricas(best_metricas)
 
-    scaler_y = StandardScaler()
-    y_train_scaled = scaler_y.fit_transform(y_train)
+    if best_model_weights is not None:
+        modelo.load_state_dict(best_model_weights)
+    modelo.eval()
 
-    input_dim = X_train_final.shape[1]
-    output_dim = y_train_scaled.shape[1]
-    
-    # Divisão simples de Treino/Validação para o Optuna (Rápido e Eficiente)
-    X_tr, X_val, y_tr, y_val = train_test_split(X_train_final, y_train_scaled, test_size=0.15, random_state=42)
+    dummy_x_num  = x_num[[0]].to(dev)
+    dummy_x_base = x_base[[0]].to(dev)
+    dummy_x_add  = x_add[[0]].to(dev)
 
-    def objective(trial):
-        params = {
-            "learning_rate": trial.suggest_float("learning_rate", 1e-4, 1e-2, log=True),
-            "weight_decay": trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True),
-            "dropout_rate": trial.suggest_categorical("dropout_rate", [0.0, 0.1, 0.2]),
-            "use_batchnorm": trial.suggest_categorical("use_batchnorm", [True, False]),
-            "activation_name": trial.suggest_categorical("activation_name", ["relu", "gelu", "silu", "mish"]),
-            "batch_size": trial.suggest_categorical("batch_size", [32, 64]),
-            "hidden_layers": trial.suggest_categorical("hidden_layers", ["128,64", "256,128", "128,128,64"]),
-            "num_epochs": trial.suggest_categorical("num_epochs", [50, 100]),
-            "optimizer_name": trial.suggest_categorical("optimizer_name", ["adam", "adamw"]),
+    torch.onnx.export(
+        modelo, 
+        (dummy_x_num, dummy_x_base, dummy_x_add), 
+        onnx_path, 
+        export_params=True,
+        input_names=["x_num", "x_base", "x_add"], 
+        output_names=["outputs"], 
+        dynamic_axes={
+            "x_num": {0: "batch_size"},
+            "x_base": {0: "batch_size"},
+            "x_add": {0: "batch_size"},
+            "outputs": {0: "batch_size"}
         }
+    )
+    print(f"Modelo ONNX salvo em: {onnx_path}")
 
-        try:
-            model = treinar_modelo_pytorch(X_tr, y_tr, X_val, y_val, params, input_dim, output_dim, trial=trial)
-            preds = prever_modelo_pytorch(model, X_val)
-            return mean_squared_error(y_val, preds)
-        except optuna.TrialPruned:
-            raise
 
-    print("Iniciando Otimização com Optuna (Validação com Pruning ativo)...")
-    # O pruner MedianPruner corta experimentos que começam apresentando resultados ruins
-    study = optuna.create_study(direction="minimize", pruner=optuna.pruners.MedianPruner())
-    study.optimize(objective, n_trials=20)
-    print(f"Otimização concluída! Melhor MSE de Validação: {study.best_value:.6f}")
-
-    print("\nRetreinando modelo final com os melhores parâmetros...")
-    melhores_parametros = study.best_params
-    melhor_modelo_final = treinar_modelo_pytorch(X_train_final, y_train_scaled, X_val, y_val, melhores_parametros, input_dim, output_dim)
-
-    # Avaliação final no conjunto de Teste isolado
-    y_pred_scaled = prever_modelo_pytorch(melhor_modelo_final, X_test_final)
-    y_pred = scaler_y.inverse_transform(y_pred_scaled)
-
-    nomes_parametros = ["Voltagem (V)", "Amperagem (A)", "Velocidade de Soldagem"]
-    print("\n" + "="*60)
-    print("MÉTRICAS REAIS POR VARIÁVEL (BASE DE TESTE)")
-    print("="*60)
-    for i, nome in enumerate(nomes_parametros):
-        print(f"Parâmetro: {nome}")
-        print(f"  MAE: {mean_absolute_error(y_test[:, i], y_pred[:, i]):.4f}")
-        print(f"  MSE: {mean_squared_error(y_test[:, i], y_pred[:, i]):.4f}")
-        print(f"  R2 : {r2_score(y_test[:, i], y_pred[:, i]):.4f}\n")
+    return {
+        "best_val_mse": best_metricas["mse"],
+        "best_val_mae": best_metricas["mae"],
+        "best_val_r2": best_metricas["r2"],
+        "onnx_path": onnx_path}
     
-    caminho_onnx = exportar_para_onnx(melhor_modelo_final, input_dim=input_dim)
-    return caminho_onnx, melhores_parametros
-
-# =====================================================================
-# 5. BLOCO DE EXECUÇÃO
-# =====================================================================
-if __name__ == "__main__":
-    caminho_dos_dados = "C:\\Users\\Workstation\\Documents\\GitHub\\welding-optuna-pytorch\\data\\all_data.csv"
-
-    if not os.path.exists(caminho_dos_dados):
-        raise FileNotFoundError(f"Não encontrei o arquivo no caminho: '{caminho_dos_dados}'")
-
-    class BaseDadosReal:
-        def __init__(self, caminho):
-            self.caminho = caminho
-        def obter_dados_limpos(self):
-            df_bruto = pd.read_csv(self.caminho)
-            return limpeza(df_bruto)
-
-    adaptador = BaseDadosReal(caminho_dos_dados)
-    df_pronto = adaptador.obter_dados_limpos() # Correção: Extraindo o dataframe limpo antes de treinar
-    
-    print("\n" + "="*60)
-    print("INICIANDO MODELAGEM PREDITIVA COM DADOS REAIS DE SOLDAGEM")
-    print("="*60)
-    
-    caminho_modelo_onnx, melhores_configuracoes = train(df_pronto)
-    
-    print("\n" + "="*60)
-    print(f"Modelo de produção exportado para: {caminho_modelo_onnx}")
-    print("="*60)
