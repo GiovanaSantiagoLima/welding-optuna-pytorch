@@ -55,7 +55,7 @@ def criar_dataloaders(caminho_arquivo_pt: str, batch_size: int = 32):
     dataset_treino = DatasetSoldagem(caminho_arquivo_pt, modo='train')
     dataset_teste = DatasetSoldagem(caminho_arquivo_pt, modo='test')
     
-    loader_treino = DataLoader(dataset_treino, batch_size=batch_size, shuffle=True)
+    loader_treino = DataLoader(dataset_treino, batch_size=batch_size, shuffle=True, drop_last=True)
     
     loader_teste = DataLoader(dataset_teste, batch_size=batch_size, shuffle=False)
     
