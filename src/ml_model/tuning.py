@@ -2,12 +2,12 @@ import os
 import json
 import optuna
 from dotenv import load_dotenv
-from train import treinar, imprimir_metricas, OUTPUT_NAMES
+from train import treinar_cv, treino, imprimir_metricas, OUTPUT_NAMES
 
 load_dotenv()
 DATA_PATH = os.getenv("DADOS_PROJETO")
 
-# ── Configurações do estudo ───────────────────────────────────────────────────
+#Configurações do estudo 
 ntrials_   = 50
 epochs_    = 100
 patience_  = 15
@@ -32,7 +32,7 @@ def objective(trial: optuna.Trial) -> float:
         "criterion":     trial.suggest_categorical("criterion", ["MSELoss", "L1Loss", "HuberLoss"]),
     }
 
-    resultado = treinar(
+    resultado = treino(
         params=params,
         data_path=DATA_PATH,
         epochs=epochs_,
@@ -65,10 +65,10 @@ def rodar_estudo():
     for k, v in melhor.params.items():
         print(f"    {k}: {v}")
 
-    # — Métricas detalhadas do melhor trial —
+    # Métricas detalhadas do melhor trial 
     # Roda uma vez mais o melhor trial para obter MSE/MAE/R² por output
     print(f"\n  Calculando métricas detalhadas do melhor trial...")
-    resultado_melhor = treinar(
+    resultado_melhor = treino(
         params=melhor.params,
         data_path=DATA_PATH,
         epochs=epochs_,
@@ -118,32 +118,38 @@ def rodar_estudo():
 def treinar_modelo_final(json_path: str = "melhor_trial.json"):
     """
     Treina o modelo final com os melhores hiperparâmetros encontrados,
-    usando mais épocas e patience maior.
+    usando K-Fold, mais épocas, e exporta o melhor modelo (de todos os folds) para ONNX.
     """
-    with open(json_path) as f:
+    with open(json_path, "r") as f:
         dados = json.load(f)
 
     params = dados["params"]
     sep = "=" * 60
 
+    print(f"\n{sep}")
+    print("  TREINANDO MODELO FINAL COM CROSS-VALIDATION (K-FOLD)")
     print(f"{sep}")
-    print("  Treinando modelo final com os melhores hiperparâmetros:")
+    print("  Parâmetros utilizados:")
     for k, v in params.items():
         print(f"    {k}: {v}")
     print(sep)
 
-    resultado = treinar(
+    resultado = treinar_cv(
         params=params,
         data_path=DATA_PATH,
-        epochs=300,
-        patience=30,
+        epochs=300,        
+        patience=30,       
+        k_folds=5,         
+        exportar_onnx=True,
+        onnx_path="melhor_modelo_producao.onnx"
     )
 
-    print(f"\n  MÉTRICAS FINAIS DO MODELO (val)")
+    print(f"\n{sep}")
+    print(f"  MÉTRICAS FINAIS DO MODELO (Média CV)")
     metricas_display = {k.replace("best_val_", ""): v for k, v in resultado.items() if k.startswith("best_val_")}
     imprimir_metricas(metricas_display, prefixo="  ")
-    print(f"  Parou na época: {resultado['stopped_epoch']}")
-    print(sep)
+    print(f"  Exportação do ONNX concluída com sucesso.")
+    print(f"{sep}\n")
 
     return resultado
 

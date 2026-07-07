@@ -1,10 +1,10 @@
 import os
-import copy
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
-from dataset import criar_dataloaders
+import copy
+from dataset import criar_dataloaders,data_loader_cross_validation
 from model import RedeSoldagem
 
 OUTPUT_NAMES = ["voltagem", "amperagem", "velocidade"]
@@ -23,6 +23,7 @@ def calcular_metricas(preds: torch.Tensor, targets: torch.Tensor) -> dict:
     """
     result = {}
 
+    # — Por output —
     for i, nome in enumerate(OUTPUT_NAMES):
         p = preds[:, i]
         t = targets[:, i]
@@ -66,9 +67,9 @@ def imprimir_metricas(metricas: dict, prefixo: str = "") -> None:
     print(f"{prefixo}{sep}\n")
 
 
-def treinar(params: dict, data_path: str, epochs: int = 100, patience: int = 10, device: str | None = None, onnx_path: str = "melhor_modelo.onnx") -> dict: 
+def treino(params: dict, data_path: str, epochs: int = 100, patience: int = 10, device: str | None = None) -> dict:
     """
-    Treina o RedeSoldagem com os hiperparâmetros fornecidos e exporta para ONNX.
+    Treina o RedeSoldagem com os hiperparâmetros fornecidos.
 
     Parâmetros
     ----------
@@ -218,7 +219,6 @@ def treinar(params: dict, data_path: str, epochs: int = 100, patience: int = 10,
         if metricas["mse"] < best_val_mse:
             best_val_mse  = metricas["mse"]
             best_metricas = metricas
-            best_model_weights = copy.deepcopy(modelo.state_dict()) 
             epochs_sem_melhora = 0
         else:
             epochs_sem_melhora += 1
@@ -230,37 +230,190 @@ def treinar(params: dict, data_path: str, epochs: int = 100, patience: int = 10,
     # — Relatório final —
     print(f"\n{'=' * 54}")
     print(f"  MÉTRICAS FINAIS DE VALIDAÇÃO (melhor época)")
-    
     imprimir_metricas(best_metricas)
 
-    if best_model_weights is not None:
-        modelo.load_state_dict(best_model_weights)
-    modelo.eval()
+    return {
+        # Global
+        "best_val_mse":             best_metricas["mse"],
+        "best_val_mae":             best_metricas["mae"],
+        "best_val_r2":              best_metricas["r2"],
+        # Por output
+        "best_val_mse_voltagem":    best_metricas["mse_voltagem"],
+        "best_val_mae_voltagem":    best_metricas["mae_voltagem"],
+        "best_val_r2_voltagem":     best_metricas["r2_voltagem"],
+        "best_val_mse_amperagem":   best_metricas["mse_amperagem"],
+        "best_val_mae_amperagem":   best_metricas["mae_amperagem"],
+        "best_val_r2_amperagem":    best_metricas["r2_amperagem"],
+        "best_val_mse_velocidade":  best_metricas["mse_velocidade"],
+        "best_val_mae_velocidade":  best_metricas["mae_velocidade"],
+        "best_val_r2_velocidade":   best_metricas["r2_velocidade"],
+        # Histórico
+        "stopped_epoch":            stopped_epoch,
+        "hist_train":               hist_train,
+        "hist_val":                 hist_val,
+    }
 
-    dummy_x_num  = x_num[[0]].to(dev)
-    dummy_x_base = x_base[[0]].to(dev)
-    dummy_x_add  = x_add[[0]].to(dev)
 
-    torch.onnx.export(
-        modelo, 
-        (dummy_x_num, dummy_x_base, dummy_x_add), 
-        onnx_path, 
-        export_params=True,
-        input_names=["x_num", "x_base", "x_add"], 
-        output_names=["outputs"], 
-        dynamic_axes={
-            "x_num": {0: "batch_size"},
-            "x_base": {0: "batch_size"},
-            "x_add": {0: "batch_size"},
-            "outputs": {0: "batch_size"}
-        }
-    )
-    print(f"Modelo ONNX salvo em: {onnx_path}")
+def treinar_cv(params: dict, data_path: str, epochs: int = 100, patience: int = 10, device: str | None = None, k_folds: int = 5, exportar_onnx: bool = False, onnx_path: str = "melhor_modelo_producao.onnx") -> dict:
+    """
+    Treina o RedeSoldagem utilizando Validação Cruzada (K-Fold).
+    Retorna um dicionário com as MÉDIAS das métricas globais e por output entre todos os folds.
+    """
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    dev = torch.device(device)
+    print(f"[train] Dispositivo: {dev}")
 
+    # Cria a lista com os pares de DataLoaders para cada fold
+    batch_size = params.get("batch_size", 32)
+    dataloaders_folds = data_loader_cross_validation(data_path, batch_size=batch_size, k_folds=k_folds)
+    (x_num, x_base, x_add), _ = next(iter(dataloaders_folds[0][0]))
+    num_features = x_num.shape[1]
+    
+    # Carrega dados brutos para pegar o tamanho do vocabulário
+    dados = torch.load(data_path, weights_only=True)
+    vocab_base = int(max(dados["X_train_emb_base"].max(), dados["X_test_emb_base"].max()).item() + 1)
+    vocab_add  = int(max(dados["X_train_emb_add"].max(), dados["X_test_emb_add"].max()).item() + 1)
+
+    # Lista para armazenar as melhores métricas de CADA fold
+    metricas_folds = []
+    
+    # Variáveis para guardar o melhor modelo geral (para exportar ONNX se necessário)
+    melhor_mse_absoluto = float("inf")
+    melhor_modelo_pesos = None
+    melhores_entradas_dummy = None
+
+    # ==========================================
+    # INÍCIO DO LOOP DE VALIDAÇÃO CRUZADA
+    # ==========================================
+    for fold, (loader_treino, loader_val) in enumerate(dataloaders_folds):
+        print(f"\n{'-'*20} INICIANDO FOLD {fold + 1}/{k_folds} {'-'*20}")
+        
+        modelo = RedeSoldagem(
+            num_features_continuas=num_features,
+            vocab_base_size=vocab_base,
+            vocab_add_size=vocab_add,
+            emb_dim=params["emb_dim"],
+            hidden_size=params["hidden_size"],
+            num_layers=params["num_layers"],
+            dropout_rate=params["dropout_rate"],
+        ).to(dev)
+
+        opt_name = params.get("optimizer", "AdamW")
+        if opt_name == "AdamW":
+            optimizer = optim.AdamW(modelo.parameters(), lr=params["learning_rate"], weight_decay=params["weight_decay"])
+        elif opt_name == "Adam":
+            optimizer = optim.Adam(modelo.parameters(), lr=params["learning_rate"], weight_decay=params["weight_decay"])
+        elif opt_name == "SGD":
+            optimizer = optim.SGD(modelo.parameters(), lr=params["learning_rate"], weight_decay=params["weight_decay"])
+        else:
+            optimizer = optim.RMSprop(modelo.parameters(), lr=params["learning_rate"], weight_decay=params["weight_decay"])
+
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=max(5, patience // 4))
+
+        criterion_name = params.get("criterion", "MSELoss")
+        if criterion_name == "MSELoss":
+            criterion = nn.MSELoss()
+        elif criterion_name == "HuberLoss":
+            criterion = nn.HuberLoss()
+        elif criterion_name == "L1Loss":
+            criterion = nn.L1Loss()
+
+        # 2. LOOP DE ÉPOCAS DESTE FOLD
+        best_val_mse       = float("inf")
+        best_metricas_fold = None
+        epochs_sem_melhora = 0
+
+        for epoca in range(1, epochs + 1):
+            # — Treino —
+            modelo.train()
+            for (x_num, x_base, x_add), y_batch in loader_treino:
+                x_num, x_base, x_add, y_batch = x_num.to(dev), x_base.to(dev), x_add.to(dev), y_batch.to(dev)
+
+                optimizer.zero_grad()
+                pred = modelo(x_num, x_base, x_add)
+                loss = criterion(pred, y_batch)
+                loss.backward()
+                nn.utils.clip_grad_norm_(modelo.parameters(), max_norm=1.0)
+                optimizer.step()
+
+            # — Validação —
+            modelo.eval()
+            all_preds, all_targets = [], []
+            with torch.no_grad():
+                for (x_num_val, x_base_val, x_add_val), y_batch_val in loader_val:
+                    x_num_val, x_base_val, x_add_val, y_batch_val = x_num_val.to(dev), x_base_val.to(dev), x_add_val.to(dev), y_batch_val.to(dev)
+                    all_preds.append(modelo(x_num_val, x_base_val, x_add_val))
+                    all_targets.append(y_batch_val)
+
+            all_preds = torch.cat(all_preds)
+            all_targets = torch.cat(all_targets)
+            
+            # Chama sua função calcular_metricas (que já está no train.py)
+            metricas = calcular_metricas(all_preds, all_targets)
+            scheduler.step(metricas["mse"])
+
+            # — Early stopping do Fold —
+            if metricas["mse"] < best_val_mse:
+                best_val_mse = metricas["mse"]
+                best_metricas_fold = metricas
+                epochs_sem_melhora = 0
+                
+                # Guarda os pesos se este for o melhor modelo de TODOS os folds (para o ONNX)
+                if best_val_mse < melhor_mse_absoluto:
+                    melhor_mse_absoluto = best_val_mse
+                    melhor_modelo_pesos = copy.deepcopy(modelo.state_dict())
+                    melhores_entradas_dummy = (x_num_val[[0]], x_base_val[[0]], x_add_val[[0]])
+            else:
+                epochs_sem_melhora += 1
+                if epochs_sem_melhora >= patience:
+                    print(f"  Fold {fold+1} | Early stopping na época {epoca}. Melhor MSE: {best_val_mse:.4f}")
+                    break
+        
+        # Salva o melhor resultado deste fold na lista geral
+        metricas_folds.append(best_metricas_fold)
+        print(f"  Resumo Fold {fold+1} -> MSE: {best_metricas_fold['mse']:.4f} | R²: {best_metricas_fold['r2']:.4f}")
+
+    
+    metricas_medias = {}
+    for chave in metricas_folds[0].keys():
+        metricas_medias[chave] = float(np.mean([m[chave] for m in metricas_folds]))
+
+    print(f"\n{'=' * 54}")
+    print(f"  MÉTRICAS MÉDIAS DA VALIDAÇÃO CRUZADA ({k_folds} Folds)")
+    imprimir_metricas(metricas_medias) # Chama sua função de print
+
+    # Exporta para ONNX apenas se solicitado (Geralmente no final)
+    if exportar_onnx and melhor_modelo_pesos is not None:
+        modelo.load_state_dict(melhor_modelo_pesos)
+        modelo.eval()
+        torch.onnx.export(
+            modelo, 
+            melhores_entradas_dummy, 
+            onnx_path, 
+            export_params=True,
+            input_names=["x_num", "x_base", "x_add"], 
+            output_names=["outputs"], 
+            dynamic_axes={
+                "x_num": {0: "batch_size"},
+                "x_base": {0: "batch_size"},
+                "x_add": {0: "batch_size"},
+                "outputs": {0: "batch_size"}
+            }
+        )
+        print(f"Melhor modelo absoluto salvo em ONNX: {onnx_path}")
 
     return {
-        "best_val_mse": best_metricas["mse"],
-        "best_val_mae": best_metricas["mae"],
-        "best_val_r2": best_metricas["r2"],
-        "onnx_path": onnx_path}
-    
+        "best_val_mse":             metricas_medias["mse"],
+        "best_val_mae":             metricas_medias["mae"],
+        "best_val_r2":              metricas_medias["r2"],
+        "best_val_mse_voltagem":    metricas_medias["mse_voltagem"],
+        "best_val_mae_voltagem":    metricas_medias["mae_voltagem"],
+        "best_val_r2_voltagem":     metricas_medias["r2_voltagem"],
+        "best_val_mse_amperagem":   metricas_medias["mse_amperagem"],
+        "best_val_mae_amperagem":   metricas_medias["mae_amperagem"],
+        "best_val_r2_amperagem":    metricas_medias["r2_amperagem"],
+        "best_val_mse_velocidade":  metricas_medias["mse_velocidade"],
+        "best_val_mae_velocidade":  metricas_medias["mae_velocidade"],
+        "best_val_r2_velocidade":   metricas_medias["r2_velocidade"]
+    }
