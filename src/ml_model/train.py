@@ -1,4 +1,6 @@
 import os
+import io
+import onnx
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -375,22 +377,25 @@ def treinar_cv(params: dict, data_path: str, epochs: int = 100, patience: int = 
         print(f"  Resumo Fold {fold+1} -> MSE: {best_metricas_fold['mse']:.4f} | R²: {best_metricas_fold['r2']:.4f}")
 
     
-    metricas_medias = {}
-    for chave in metricas_folds[0].keys():
-        metricas_medias[chave] = float(np.mean([m[chave] for m in metricas_folds]))
+        metricas_medias = {}
+        for chave in metricas_folds[0].keys():
+            metricas_medias[chave] = float(np.mean([m[chave] for m in metricas_folds]))
 
-    print(f"\n{'=' * 54}")
-    print(f"  MÉTRICAS MÉDIAS DA VALIDAÇÃO CRUZADA ({k_folds} Folds)")
-    imprimir_metricas(metricas_medias) # Chama sua função de print
+        print(f"\n{'=' * 54}")
+        print(f"  MÉTRICAS MÉDIAS DA VALIDAÇÃO CRUZADA ({k_folds} Folds)")
+        imprimir_metricas(metricas_medias) 
 
-    # Exporta para ONNX apenas se solicitado (Geralmente no final)
-    if exportar_onnx and melhor_modelo_pesos is not None:
-        modelo.load_state_dict(melhor_modelo_pesos)
-        modelo.eval()
+        
+        if  exportar_onnx and melhor_modelo_pesos is not None:
+            modelo.load_state_dict(melhor_modelo_pesos)
+            modelo.eval()
+        
+        buffer_memoria = io.BytesIO()
+        
         torch.onnx.export(
             modelo, 
             melhores_entradas_dummy, 
-            onnx_path, 
+            buffer_memoria,  
             export_params=True,
             input_names=["x_num", "x_base", "x_add"], 
             output_names=["outputs"], 
@@ -401,9 +406,21 @@ def treinar_cv(params: dict, data_path: str, epochs: int = 100, patience: int = 
                 "outputs": {0: "batch_size"}
             }
         )
-        print(f"Melhor modelo absoluto salvo em ONNX: {onnx_path}")
-
-    return {
+        
+        modelo_carregado = onnx.load(onnx_path)
+        onnx.save_model(
+            modelo_carregado, 
+            onnx_path, 
+            save_as_external_data=False  
+        )
+    
+        arquivo_data = f"{onnx_path}.data"
+        if os.path.exists(arquivo_data):
+            os.remove(arquivo_data)
+            
+        print(f"Modelo: {onnx_path}")
+        
+        return {
         "best_val_mse":             metricas_medias["mse"],
         "best_val_mae":             metricas_medias["mae"],
         "best_val_r2":              metricas_medias["r2"],

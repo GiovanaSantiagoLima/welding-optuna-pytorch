@@ -16,8 +16,8 @@ study_name = "soldagem_v1"
 
 def objective(trial: optuna.Trial) -> float:
     """
-    Função objetivo: retorna o melhor val_mse global do trial.
-    O Optuna minimiza esse valor.
+    Função objetivo: retorna o melhor val_r2 global do trial.
+    O Optuna maximiza esse valor.
     """
     params = {
         "hidden_size":   trial.suggest_categorical("hidden_size", [128, 256]),
@@ -39,26 +39,24 @@ def objective(trial: optuna.Trial) -> float:
         patience=patience_,
     )
 
-    return resultado["best_val_mse"]
+    return resultado["best_val_r2"], resultado["best_val_mse"]
 
 
 def rodar_estudo():
     """Cria ou continua o estudo Optuna e salva os resultados."""
 
     study = optuna.create_study(
-        direction="minimize",
+        directions=["maximize", "minimize"],
         sampler=optuna.samplers.TPESampler(seed=42),
         pruner=optuna.pruners.MedianPruner(n_warmup_steps=10),
     )
     study.optimize(objective, n_trials=ntrials_, show_progress_bar=True, gc_after_trial=True)
 
-    melhor = study.best_trial
-    sep = "=" * 60
+    melhores_trials = study.best_trials
+    melhor = max(melhores_trials, key=lambda t: t.values[0])
 
     # — Cabeçalho —
-    print(f"\n{sep}")
     print(f"  MELHOR TRIAL: #{melhor.number}")
-    print(sep)
 
     # — Parâmetros —
     print("  Parâmetros:")
@@ -66,7 +64,6 @@ def rodar_estudo():
         print(f"    {k}: {v}")
 
     # Métricas detalhadas do melhor trial 
-    # Roda uma vez mais o melhor trial para obter MSE/MAE/R² por output
     print(f"\n  Calculando métricas detalhadas do melhor trial...")
     resultado_melhor = treino(
         params=melhor.params,
@@ -89,7 +86,6 @@ def rodar_estudo():
     except Exception:
         pass
 
-    print(sep)
 
     # — Salva JSON —
     resultado_json = {
@@ -124,15 +120,11 @@ def treinar_modelo_final(json_path: str = "melhor_trial.json"):
         dados = json.load(f)
 
     params = dados["params"]
-    sep = "=" * 60
 
-    print(f"\n{sep}")
     print("  TREINANDO MODELO FINAL COM CROSS-VALIDATION (K-FOLD)")
-    print(f"{sep}")
     print("  Parâmetros utilizados:")
     for k, v in params.items():
         print(f"    {k}: {v}")
-    print(sep)
 
     resultado = treinar_cv(
         params=params,
@@ -144,29 +136,16 @@ def treinar_modelo_final(json_path: str = "melhor_trial.json"):
         onnx_path="melhor_modelo_producao.onnx"
     )
 
-    print(f"\n{sep}")
     print(f"  MÉTRICAS FINAIS DO MODELO (Média CV)")
     metricas_display = {k.replace("best_val_", ""): v for k, v in resultado.items() if k.startswith("best_val_")}
     imprimir_metricas(metricas_display, prefixo="  ")
     print(f"  Exportação do ONNX concluída com sucesso.")
-    print(f"{sep}\n")
 
     return resultado
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--modo",
-        choices=["tuning", "final"],
-        default="tuning",
-        help="'tuning' roda o Optuna | 'final' treina com melhor_trial.json",
-    )
-    args = parser.parse_args()
-
-    if args.modo == "tuning":
-        rodar_estudo()
-    else:
-        treinar_modelo_final()
+    print("Iniciando a busca de hiperparâmetros (Tuning)...")
+    rodar_estudo()
+    print("\nBusca concluída! Iniciando o treinamento do modelo final e exportação para ONNX...")
+    treinar_modelo_final()
