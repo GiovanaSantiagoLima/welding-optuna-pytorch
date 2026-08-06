@@ -256,38 +256,41 @@ def treino(params: dict, data_path: str, epochs: int = 100, patience: int = 10, 
     }
 
 
-def treinar_cv(params: dict, data_path: str, epochs: int = 100, patience: int = 10, device: str | None = None, k_folds: int = 5, exportar_onnx: bool = False, onnx_path: str = "melhor_modelo_producao.onnx") -> dict:
+def treinar_cv(
+    params: dict, 
+    data_path: str, 
+    epochs: int = 100, 
+    patience: int = 10, 
+    device: str | None = None, 
+    k_folds: int = 5, 
+    exportar_onnx: bool = False, 
+    onnx_path: str = "melhor_modelo_producao.onnx"
+) -> dict:
     """
-    Treina o RedeSoldagem utilizando Validação Cruzada (K-Fold).
-    Retorna um dicionário com as MÉDIAS das métricas globais e por output entre todos os folds.
+    Treina o RedeSoldagem utilizando Validação Cruzada (K-Fold) com Loss Ponderada.
     """
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     dev = torch.device(device)
     print(f"[train] Dispositivo: {dev}")
 
-    # Cria a lista com os pares de DataLoaders para cada fold
     batch_size = params.get("batch_size", 32)
     dataloaders_folds = data_loader_cross_validation(data_path, batch_size=batch_size, k_folds=k_folds)
     (x_num, x_base, x_add), _ = next(iter(dataloaders_folds[0][0]))
     num_features = x_num.shape[1]
     
-    # Carrega dados brutos para pegar o tamanho do vocabulário
     dados = torch.load(data_path, weights_only=True)
     vocab_base = int(max(dados["X_train_emb_base"].max(), dados["X_test_emb_base"].max()).item() + 1)
     vocab_add  = int(max(dados["X_train_emb_add"].max(), dados["X_test_emb_add"].max()).item() + 1)
 
-    # Lista para armazenar as melhores métricas de CADA fold
+    # Pesos das saídas: [voltagem=1.0, amperagem=1.0, velocidade=2.0]
+    pesos_loss = torch.tensor([1.0, 1.0, 2.0], device=dev)
+
     metricas_folds = []
-    
-    # Variáveis para guardar o melhor modelo geral (para exportar ONNX se necessário)
     melhor_mse_absoluto = float("inf")
     melhor_modelo_pesos = None
     melhores_entradas_dummy = None
 
-    # ==========================================
-    # INÍCIO DO LOOP DE VALIDAÇÃO CRUZADA
-    # ==========================================
     for fold, (loader_treino, loader_val) in enumerate(dataloaders_folds):
         print(f"\n{'-'*20} INICIANDO FOLD {fold + 1}/{k_folds} {'-'*20}")
         
@@ -313,16 +316,16 @@ def treinar_cv(params: dict, data_path: str, epochs: int = 100, patience: int = 
 
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=max(5, patience // 4))
 
+        # Seleção da função de perda base sem redução para aplicar os pesos
         criterion_name = params.get("criterion", "MSELoss")
-        if criterion_name == "MSELoss":
-            criterion = nn.MSELoss()
-        elif criterion_name == "HuberLoss":
-            criterion = nn.HuberLoss()
+        if criterion_name == "HuberLoss":
+            criterion_base = nn.HuberLoss(reduction="none")
         elif criterion_name == "L1Loss":
-            criterion = nn.L1Loss()
+            criterion_base = nn.L1Loss(reduction="none")
+        else:
+            criterion_base = nn.MSELoss(reduction="none")
 
-        # 2. LOOP DE ÉPOCAS DESTE FOLD
-        best_val_mse       = float("inf")
+        best_val_mse = float("inf")
         best_metricas_fold = None
         epochs_sem_melhora = 0
 
@@ -334,7 +337,11 @@ def treinar_cv(params: dict, data_path: str, epochs: int = 100, patience: int = 
 
                 optimizer.zero_grad()
                 pred = modelo(x_num, x_base, x_add)
-                loss = criterion(pred, y_batch)
+                
+                # --- LOSS PONDERADA ENXUTA ---
+                loss_por_variavel = criterion_base(pred, y_batch).mean(dim=0)
+                loss = (loss_por_variavel * pesos_loss).sum()
+                
                 loss.backward()
                 nn.utils.clip_grad_norm_(modelo.parameters(), max_norm=1.0)
                 optimizer.step()
@@ -351,17 +358,14 @@ def treinar_cv(params: dict, data_path: str, epochs: int = 100, patience: int = 
             all_preds = torch.cat(all_preds)
             all_targets = torch.cat(all_targets)
             
-            # Chama sua função calcular_metricas (que já está no train.py)
             metricas = calcular_metricas(all_preds, all_targets)
             scheduler.step(metricas["mse"])
 
-            # — Early stopping do Fold —
             if metricas["mse"] < best_val_mse:
                 best_val_mse = metricas["mse"]
                 best_metricas_fold = metricas
                 epochs_sem_melhora = 0
                 
-                # Guarda os pesos se este for o melhor modelo de TODOS os folds (para o ONNX)
                 if best_val_mse < melhor_mse_absoluto:
                     melhor_mse_absoluto = best_val_mse
                     melhor_modelo_pesos = copy.deepcopy(modelo.state_dict())
@@ -372,26 +376,24 @@ def treinar_cv(params: dict, data_path: str, epochs: int = 100, patience: int = 
                     print(f"  Fold {fold+1} | Early stopping na época {epoca}. Melhor MSE: {best_val_mse:.4f}")
                     break
         
-        # Salva o melhor resultado deste fold na lista geral
         metricas_folds.append(best_metricas_fold)
         print(f"  Resumo Fold {fold+1} -> MSE: {best_metricas_fold['mse']:.4f} | R²: {best_metricas_fold['r2']:.4f}")
 
+    metricas_medias = {
+        chave: float(np.mean([m[chave] for m in metricas_folds])) 
+        for chave in metricas_folds[0].keys()
+    }
+
+    print(f"\n{'=' * 54}")
+    print(f"  MÉTRICAS MÉDIAS DA VALIDAÇÃO CRUZADA ({k_folds} Folds)")
+    imprimir_metricas(metricas_medias) 
+
+    # Exportação para ONNX
+    if exportar_onnx and melhor_modelo_pesos is not None:
+        modelo.load_state_dict(melhor_modelo_pesos)
+        modelo.eval()
     
-        metricas_medias = {}
-        for chave in metricas_folds[0].keys():
-            metricas_medias[chave] = float(np.mean([m[chave] for m in metricas_folds]))
-
-        print(f"\n{'=' * 54}")
-        print(f"  MÉTRICAS MÉDIAS DA VALIDAÇÃO CRUZADA ({k_folds} Folds)")
-        imprimir_metricas(metricas_medias) 
-
-        
-        if  exportar_onnx and melhor_modelo_pesos is not None:
-            modelo.load_state_dict(melhor_modelo_pesos)
-            modelo.eval()
-        
         buffer_memoria = io.BytesIO()
-        
         torch.onnx.export(
             modelo, 
             melhores_entradas_dummy, 
@@ -399,6 +401,7 @@ def treinar_cv(params: dict, data_path: str, epochs: int = 100, patience: int = 
             export_params=True,
             input_names=["x_num", "x_base", "x_add"], 
             output_names=["outputs"], 
+            dynamo=False,
             dynamic_axes={
                 "x_num": {0: "batch_size"},
                 "x_base": {0: "batch_size"},
@@ -406,21 +409,18 @@ def treinar_cv(params: dict, data_path: str, epochs: int = 100, patience: int = 
                 "outputs": {0: "batch_size"}
             }
         )
-        
-        modelo_carregado = onnx.load(onnx_path)
-        onnx.save_model(
-            modelo_carregado, 
-            onnx_path, 
-            save_as_external_data=False  
-        )
     
+        buffer_memoria.seek(0)
+        modelo_carregado = onnx.load_model_from_string(buffer_memoria.getvalue())
+        onnx.save_model(modelo_carregado, onnx_path, save_as_external_data=False)
+
         arquivo_data = f"{onnx_path}.data"
         if os.path.exists(arquivo_data):
             os.remove(arquivo_data)
             
-        print(f"Modelo: {onnx_path}")
+        print(f"Modelo salvo com sucesso em: {onnx_path}")
         
-        return {
+    return {
         "best_val_mse":             metricas_medias["mse"],
         "best_val_mae":             metricas_medias["mae"],
         "best_val_r2":              metricas_medias["r2"],
