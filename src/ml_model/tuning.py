@@ -31,14 +31,14 @@ def objective(trial: optuna.Trial) -> float:
         "optimizer":     trial.suggest_categorical("optimizer", ["Adam", "AdamW", "SGD", "RMSprop"]),
         "criterion":     trial.suggest_categorical("criterion", ["MSELoss", "L1Loss", "HuberLoss"]),
     }
-
-    resultado = treino(
+    resultado = treinar_cv(
         params=params,
         data_path=DATA_PATH,
         epochs=epochs_,
         patience=patience_,
+        k_folds=3,           
+        exportar_onnx=False  
     )
-
     return resultado["best_val_r2"], resultado["best_val_mse"]
 
 
