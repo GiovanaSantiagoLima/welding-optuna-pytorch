@@ -53,14 +53,18 @@ def preprocessar_encoder(df: pd.DataFrame) -> pd.DataFrame:
     features_gases = ["tocha_AR", "tocha_CO2", "tocha_O2", "tocha_N2", "tocha_SemGas","purga_AR", "purga_CO2", "purga_O2", "purga_N2", "purga_SemGas"]
     features_onehot = ['tipo_peca', 'passe', 'goivagem', 'cobre_junta', 'polaridade', 'progressao', 'processo', 'normas_referencia', 'tipo_chanfro', 'posicao_peca', 'limpeza', 'pnumber']
     
-    preprocessor = ColumnTransformer(   
-        transformers=[
-            ('num', StandardScaler(), features_numericas),
-            ('gases', Pipeline([('imputer', SimpleImputer(strategy='constant', fill_value=0.0)),]), features_gases),
-            ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False), features_onehot)
-        ],
-        remainder='drop') 
+    gases_pipeline = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='constant', fill_value=0.0))
+])
 
+    preprocessor = ColumnTransformer( 
+    transformers=[
+        ('num', StandardScaler(), features_numericas),
+        ('gases', gases_pipeline, features_gases),
+        ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False), features_onehot)
+    ],
+    remainder='drop'
+)
     X_train_num_cat = preprocessor.fit_transform(X_train)
     X_test_num_cat = preprocessor.transform(X_test)
     
@@ -134,9 +138,9 @@ def salvar_dados_como_tensores(resultados_preprocessamento: tuple, nome_base_arq
         'y_train': y_train_tensor,'y_test': y_test_tensor}, caminho_tensores)
     
     # Salva os objetos utilitários usando joblib 
-    caminho_prep = f"{nome_base_arquivo}_preprocessor.joblib"
-    caminho_maps = f"{nome_base_arquivo}_mappings.joblib"
-    caminho_yscaler = f"{nome_base_arquivo}_yscaler.joblib"
+    caminho_prep = "preprocessor_v1.joblib"
+    caminho_maps = "mappings_v1.joblib"
+    caminho_yscaler = "yscaler_v1.joblib"
     joblib.dump(preprocessor, caminho_prep)
     joblib.dump(mappings, caminho_maps)
     joblib.dump(y_scaler, caminho_yscaler)
