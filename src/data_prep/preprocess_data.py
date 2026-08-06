@@ -213,26 +213,37 @@ def preprocessar_dados_gases(df: pd.DataFrame) -> pd.DataFrame:
 
     gases = ["AR", "CO2", "O2", "N2"]
 
-    def processar_gas(row, pref):
-        tipo = str(row[f"tipo_gas_{pref}"])
-        pureza = str(row[f"pureza_gas_{pref}"])
-        res = {}
+    def extrair_gases(row, prefixo):
+    
+        tipo = str(row.get(f"tipo_gas_{prefixo}", "nan"))
+        pureza = str(row.get(f"pureza_gas_{prefixo}", ""))
+    
+        res = {f"{prefixo}_{g}": 0.0 for g in gases}
+    
+        # 3. Encontra os gases e valores usando regex
         gases_encontrados = re.findall(r"AR|CO2|O2|N2", tipo)
         valores = [float(n) for n in re.findall(r"\d+\.?\d*", pureza)]
-        for g in gases:
-            res[f"{pref}_{g}"] = 0
-            res[f"{pref}_{g}_presente"] = 0
-        for g, v in zip(gases_encontrados, valores):
-            res[f"{pref}_{g}"] = v
-            res[f"{pref}_{g}_presente"] = 1
-        res[f"{pref}_SemGas"] = int("Sem Gás" in tipo or tipo in ["0", "nan"])
-        return pd.Series(res)
     
-    for p in ["tocha", "purga"]:
-        df = df.join(df.apply(processar_gas, axis=1, args=(p,)))
+        # 4. Mapeia os valores encontrados para as chaves correspondentes
+        for g, v in zip(gases_encontrados, valores):
+            res[f"{prefixo}_{g}"] = v
+        
+        # 5. Condicional corrigida para o flag de Sem Gás
+        sem_gas = "Sem_Gas" in tipo or tipo in ["0", "nan", "None", ""]
+        res[f"{prefixo}_SemGas"] = int(sem_gas)
+    
+        return pd.Series(res)
 
-    df = df.drop(columns=["tipo_gas_tocha","pureza_gas_tocha","tipo_gas_purga","pureza_gas_purga"],errors="ignore")
-    return df
+    for p in ["tocha", "purga"]:
+        novas_colunas = df.apply(extrair_gases, axis=1, args=(p,))
+        df = df.join(novas_colunas)
+
+    df = df.drop(
+        columns=["tipo_gas_tocha", "pureza_gas_tocha", "tipo_gas_purga", "pureza_gas_purga"],
+        errors="ignore"
+    )
+    
+    return df 
 
 def main():
     nome_arquivo = 'data/processed/dados_reestruturados.csv'
