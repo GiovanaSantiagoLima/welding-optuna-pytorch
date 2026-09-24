@@ -24,7 +24,7 @@ def objective(trial: optuna.Trial) -> float:
         "num_layers":    trial.suggest_int("num_layers", 2, 3),
         "learning_rate": trial.suggest_float("learning_rate", 1e-4, 1e-2, log=True),
         "dropout_rate":  trial.suggest_float("dropout_rate", 0.0, 0.15),
-        "emb_dim":       trial.suggest_categorical("emb_dim", [4, 8]),
+        "emb_dim":       trial.suggest_categorical("emb_dim", [16, 32, 64]),
         "batch_size":    trial.suggest_categorical("batch_size", [32, 64, 128]),
         "weight_decay":  trial.suggest_float("weight_decay", 1e-4, 1e-3, log=True),
         "activation":    trial.suggest_categorical("activation", ["relu", "gelu", "silu"]),
@@ -39,21 +39,21 @@ def objective(trial: optuna.Trial) -> float:
         k_folds=3,           
         exportar_onnx=False  
     )
-    return resultado["best_val_r2"], resultado["best_val_mse"]
+    return resultado["best_val_mse"],resultado["best_val_r2"]  # Minimizar MSE e maximizar R2
 
 
 def rodar_estudo():
     """Cria ou continua o estudo Optuna e salva os resultados."""
 
     study = optuna.create_study(
-        directions=["maximize", "minimize"],
+        directions=["minimize", "maximize"],  # Minimizar MAE e maximizar R2
         sampler=optuna.samplers.TPESampler(seed=42),
         pruner=optuna.pruners.MedianPruner(n_warmup_steps=10),
     )
     study.optimize(objective, n_trials=ntrials_, show_progress_bar=True, gc_after_trial=True)
 
     melhores_trials = study.best_trials
-    melhor = max(melhores_trials, key=lambda t: t.values[0])
+    melhor = max(melhores_trials, key=lambda t: t.values)  # Escolhe o trial com o melhor R2
 
     # — Cabeçalho —
     print(f"  MELHOR TRIAL: #{melhor.number}")
