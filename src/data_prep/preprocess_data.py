@@ -4,21 +4,21 @@ import numpy as np
 import pandas as pd
 
 #Funções Auxiliares
+import pandas as pd
+import re
+
 def limpar_vazao(val) -> float:
     """
     Converte valores de vazão para formato numérico.
     Trata valores ausentes, intervalos e textos contendo números.
     Quando múltiplos valores são encontrados, retorna a média.
-    Args:
-        val: Valor original da vazão.
-    Returns:
-        float: Valor de vazão convertido.
     """
     if pd.isna(val):
         return 0.0
     val_str = str(val).lower().strip()
     val_str = val_str.replace('dez', '12')
-    val_str = val_str.replace(' a ', '/').replace('-', '/')
+    val_str = val_str.replace(' a ', '/').replace('-', '/').replace(' a/', '/')
+
     numeros = re.findall(r'\d+\.\d+|\d+', val_str)
     if not numeros:
         return 0.0
@@ -193,7 +193,6 @@ def excluir_linhas_indesejadas(df:pd.DataFrame)-> pd.DataFrame:
     # remover processos indesejados
     df = df[~df["processo"].isin(["SAW"])]
     df = df[~df["processo"].str.contains("TIG/ER", case=False, na=False)]
-    # colunas críticas (não podem ter NaN)
     colunas_criticas = ["voltagem","amperagem", "velocidade_de_soldagem","nariz", "abertura_raiz","angulo", "diametro_arame","espessura"]
     df = df.dropna(subset=colunas_criticas)
     return df
@@ -246,7 +245,7 @@ def preprocessar_dados_gases(df: pd.DataFrame) -> pd.DataFrame:
     return df 
 
 def main():
-    nome_arquivo = 'data/processed/dados_reestruturados.csv'
+    nome_arquivo = 'data/raw/dados_reestruturados.csv'
     print(f"Carregando os dados do arquivo: {nome_arquivo}...")
     try:
         df = pd.read_csv(nome_arquivo, sep=';') 
@@ -256,12 +255,12 @@ def main():
 
     print("Iniciando a limpeza e pré-processamento...")
     df_processado = limpar_texto(df)
-    df_processado = preencher_nulos(df_processado)
     df_processado = tratar_vazao(df_processado)
+    df_processado = preencher_nulos(df_processado)
     df_processado = excluir_linhas_indesejadas(df_processado)
     df_processado = preprocessar_dados_gases(df_processado)
 
-    arquivo_saida = 'data/dados_preprocessados.csv'
+    arquivo_saida = 'data/processed/dados_preprocessados.csv'
     df_processado.to_csv(arquivo_saida, index=False)
 
     print(f"Dados salvos como '{arquivo_saida}'.")
