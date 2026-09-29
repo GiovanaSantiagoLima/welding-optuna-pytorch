@@ -51,7 +51,7 @@ def preprocessar_encoder(df: pd.DataFrame) -> pd.DataFrame:
     
     features_numericas = ['espessura', 'diametro_base', 'angulo', 'nariz', 'abertura_raiz', 'pre_aquecimento', 'temperatura_interpasse', 'diametro_arame', 'vazao_gas_tocha', 'vazao_gas_purga']
     features_gases = ["tocha_AR", "tocha_CO2", "tocha_O2", "tocha_N2", "tocha_SemGas","purga_AR", "purga_CO2", "purga_O2", "purga_N2", "purga_SemGas"]
-    features_onehot = ['tipo_peca', 'passe', 'goivagem', 'cobre_junta', 'polaridade', 'progressao', 'processo', 'normas_referencia', 'tipo_chanfro', 'posicao_peca', 'limpeza', 'pnumber']
+    features_onehot = ['tipo_peca', 'passe', 'goivagem', 'cobre_junta', 'polaridade', 'progressao', 'processo', 'normas_referencia', 'tipo_chanfro', 'posicao_peca', 'limpeza', 'pnumber', 'material_base', 'material_adicao']
     
     gases_pipeline = Pipeline(steps=[
     ('imputer', SimpleImputer(strategy='constant', fill_value=0.0))
@@ -68,39 +68,9 @@ def preprocessar_encoder(df: pd.DataFrame) -> pd.DataFrame:
     X_train_num_cat = preprocessor.fit_transform(X_train)
     X_test_num_cat = preprocessor.transform(X_test)
     
-    #Tratamento para Embeddings (Alta Cardinalidade)
-    def criar_mapping(series):
-        categorias = series.dropna().unique()
-        return {cat: i+1 for i, cat in enumerate(categorias)}
-
-    map_base = criar_mapping(X_train["material_base"])
-    map_add = criar_mapping(X_train["material_adicao"])
     
-    
-    def aplicar_mapping(df_col, mapping):
-        return df_col.map(lambda x: mapping.get(x, 0)).values
 
-    X_train_emb_base = aplicar_mapping(X_train["material_base"], map_base)
-    X_train_emb_add = aplicar_mapping(X_train["material_adicao"], map_add)
-    X_test_emb_base = aplicar_mapping(X_test["material_base"], map_base)
-    X_test_emb_add = aplicar_mapping(X_test["material_adicao"], map_add)
-
-    # Agrupando os mapeamentos caso precise saber o tamanho do vocabulário para a Rede Neural
-    mappings = {
-        'material_base': map_base, 
-        'material_adicao': map_add,
-        'vocab_sizes': {
-            'material_base': len(map_base) + 1, # +1 por causa do UNK
-            'material_adicao': len(map_add) + 1
-        }
-    }
-
-    return (
-        X_train_num_cat, X_test_num_cat, 
-        X_train_emb_base, X_test_emb_base, 
-        X_train_emb_add, X_test_emb_add, 
-        y_train_scaled, y_test_scaled, 
-        preprocessor, mappings, y_scaler)
+    return (X_train_num_cat, X_test_num_cat,  y_train_scaled, y_test_scaled, preprocessor,y_scaler)
 
 def salvar_dados_como_tensores(resultados_preprocessamento: tuple, nome_base_arquivo: str = 'dados_soldagem') -> None:
     """
@@ -118,23 +88,18 @@ def salvar_dados_como_tensores(resultados_preprocessamento: tuple, nome_base_arq
               - {nome_base_arquivo}_mappings.joblib (Dicionário de mapeamentos e vocabulário)
     """
     
-    (X_train_num_cat, X_test_num_cat, X_train_emb_base, X_test_emb_base, X_train_emb_add, X_test_emb_add, y_train, y_test, preprocessor, mappings, y_scaler) = resultados_preprocessamento
+    (X_train_num_cat, X_test_num_cat, y_train, y_test, preprocessor, y_scaler) = resultados_preprocessamento
 
     #Convertendo para tensores    
     X_train_num_tensor = torch.tensor(X_train_num_cat, dtype=torch.float32)
     X_test_num_tensor = torch.tensor(X_test_num_cat, dtype=torch.float32)
     y_train_tensor = torch.tensor(y_train, dtype=torch.float32)
     y_test_tensor = torch.tensor(y_test, dtype=torch.float32)
-    X_train_emb_base_tensor = torch.tensor(X_train_emb_base, dtype=torch.long)
-    X_test_emb_base_tensor = torch.tensor(X_test_emb_base, dtype=torch.long)
-    X_train_emb_add_tensor = torch.tensor(X_train_emb_add, dtype=torch.long)
-    X_test_emb_add_tensor = torch.tensor(X_test_emb_add, dtype=torch.long)
-
+    
     
     caminho_tensores = f"{nome_base_arquivo}.pt"
     torch.save({
-        'X_train_num': X_train_num_tensor, 'X_test_num': X_test_num_tensor,'X_train_emb_base': X_train_emb_base_tensor,
-        'X_test_emb_base': X_test_emb_base_tensor,'X_train_emb_add': X_train_emb_add_tensor,'X_test_emb_add': X_test_emb_add_tensor,
+        'X_train_num': X_train_num_tensor, 'X_test_num': X_test_num_tensor,
         'y_train': y_train_tensor,'y_test': y_test_tensor}, caminho_tensores)
     
     # Salva os objetos utilitários usando joblib 
@@ -142,7 +107,6 @@ def salvar_dados_como_tensores(resultados_preprocessamento: tuple, nome_base_arq
     caminho_maps = "mappings_v1.joblib"
     caminho_yscaler = "yscaler_v1.joblib"
     joblib.dump(preprocessor, caminho_prep)
-    joblib.dump(mappings, caminho_maps)
     joblib.dump(y_scaler, caminho_yscaler)
     
     print(f"\n✅ Concluído! Arquivos gerados com sucesso:")

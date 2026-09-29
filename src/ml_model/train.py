@@ -77,7 +77,6 @@ def treino(params: dict, data_path: str, epochs: int = 100, patience: int = 10, 
     ----------
     params : dict
         Hiperparâmetros do modelo e do otimizador. Esperados:
-            - emb_dim           (int)
             - hidden_size       (int)
             - num_layers        (int)
             - dropout_rate      (float)
@@ -116,18 +115,15 @@ def treino(params: dict, data_path: str, epochs: int = 100, patience: int = 10, 
     # DataLoaders
     batch_size = params.get("batch_size", 32)
     loader_treino, loader_val = criar_dataloaders(data_path, batch_size=batch_size)
-    (x_num, x_base, x_add), _ = next(iter(loader_treino))
+    
+    # CORREÇÃO: Desempacotando apenas a entrada única e o y_batch (_)
+    x_num, _ = next(iter(loader_treino))
     num_features = x_num.shape[1]
-    dados = torch.load(data_path, weights_only=True)
-    vocab_base = int(dados["X_train_emb_base"].max().item() + 1)
-    vocab_add  = int(dados["X_train_emb_add"].max().item() + 1)
-
+    
     # Modelo
+    # CORREÇÃO: Removido o argumento 'emb_dim'
     modelo = RedeSoldagem(
         num_features_continuas=num_features,
-        vocab_base_size=vocab_base,
-        vocab_add_size=vocab_add,
-        emb_dim=params["emb_dim"],
         hidden_size=params["hidden_size"],
         num_layers=params["num_layers"],
         dropout_rate=params["dropout_rate"],
@@ -168,14 +164,15 @@ def treino(params: dict, data_path: str, epochs: int = 100, patience: int = 10, 
         # — Treino —
         modelo.train()
         losses_batch = []
-        for (x_num, x_base, x_add), y_batch in loader_treino:
+        
+        # CORREÇÃO: Desempacotando apenas as features (x_num) e o alvo (y_batch)
+        for x_num, y_batch in loader_treino:
             x_num   = x_num.to(dev)
-            x_base  = x_base.to(dev)
-            x_add   = x_add.to(dev)
             y_batch = y_batch.to(dev)
 
             optimizer.zero_grad()
-            pred = modelo(x_num, x_base, x_add)
+            # CORREÇÃO: Passando apenas x_num para o modelo
+            pred = modelo(x_num)
             loss = criterion(pred, y_batch)
             loss.backward()
             nn.utils.clip_grad_norm_(modelo.parameters(), max_norm=1.0)
@@ -190,12 +187,12 @@ def treino(params: dict, data_path: str, epochs: int = 100, patience: int = 10, 
         all_preds   = []
         all_targets = []
         with torch.no_grad():
-            for (x_num, x_base, x_add), y_batch in loader_val:
+            # CORREÇÃO: Desempacotando apenas as features (x_num) e o alvo (y_batch)
+            for x_num, y_batch in loader_val:
                 x_num   = x_num.to(dev)
-                x_base  = x_base.to(dev)
-                x_add   = x_add.to(dev)
                 y_batch = y_batch.to(dev)
-                all_preds.append(modelo(x_num, x_base, x_add))
+                # CORREÇÃO: Passando apenas x_num para o modelo
+                all_preds.append(modelo(x_num))
                 all_targets.append(y_batch)
 
         all_preds   = torch.cat(all_preds)
@@ -254,8 +251,6 @@ def treino(params: dict, data_path: str, epochs: int = 100, patience: int = 10, 
         "hist_train":               hist_train,
         "hist_val":                 hist_val,
     }
-
-
 def treinar_cv(
     params: dict, 
     data_path: str, 
@@ -276,13 +271,11 @@ def treinar_cv(
 
     batch_size = params.get("batch_size", 32)
     dataloaders_folds = data_loader_cross_validation(data_path, batch_size=batch_size, k_folds=k_folds)
-    (x_num, x_base, x_add), _ = next(iter(dataloaders_folds[0][0]))
+    
+    # CORREÇÃO: Desempacotando apenas a entrada única e o y_batch (_)
+    x_num, _ = next(iter(dataloaders_folds[0][0]))
     num_features = x_num.shape[1]
     
-    dados = torch.load(data_path, weights_only=True)
-    vocab_base = int(max(dados["X_train_emb_base"].max(), dados["X_test_emb_base"].max()).item() + 1)
-    vocab_add  = int(max(dados["X_train_emb_add"].max(), dados["X_test_emb_add"].max()).item() + 1)
-
     # Pesos das saídas: [voltagem=1.0, amperagem=1.0, velocidade=2.0]
     pesos_loss = torch.tensor([1.0, 1.0, 2.0], device=dev)
 
@@ -294,11 +287,9 @@ def treinar_cv(
     for fold, (loader_treino, loader_val) in enumerate(dataloaders_folds):
         print(f"\n{'-'*20} INICIANDO FOLD {fold + 1}/{k_folds} {'-'*20}")
         
+        # CORREÇÃO: Removido o argumento 'emb_dim'
         modelo = RedeSoldagem(
             num_features_continuas=num_features,
-            vocab_base_size=vocab_base,
-            vocab_add_size=vocab_add,
-            emb_dim=params["emb_dim"],
             hidden_size=params["hidden_size"],
             num_layers=params["num_layers"],
             dropout_rate=params["dropout_rate"],
@@ -332,11 +323,15 @@ def treinar_cv(
         for epoca in range(1, epochs + 1):
             # — Treino —
             modelo.train()
-            for (x_num, x_base, x_add), y_batch in loader_treino:
-                x_num, x_base, x_add, y_batch = x_num.to(dev), x_base.to(dev), x_add.to(dev), y_batch.to(dev)
+            
+            # CORREÇÃO: Desempacotando apenas as features (x_num) e o alvo (y_batch)
+            for x_num, y_batch in loader_treino:
+                x_num, y_batch = x_num.to(dev), y_batch.to(dev)
 
                 optimizer.zero_grad()
-                pred = modelo(x_num, x_base, x_add)
+                
+                # CORREÇÃO: Passando apenas x_num para o modelo
+                pred = modelo(x_num)
                 
                 # --- LOSS PONDERADA ENXUTA ---
                 loss_por_variavel = criterion_base(pred, y_batch).mean(dim=0)
@@ -350,9 +345,12 @@ def treinar_cv(
             modelo.eval()
             all_preds, all_targets = [], []
             with torch.no_grad():
-                for (x_num_val, x_base_val, x_add_val), y_batch_val in loader_val:
-                    x_num_val, x_base_val, x_add_val, y_batch_val = x_num_val.to(dev), x_base_val.to(dev), x_add_val.to(dev), y_batch_val.to(dev)
-                    all_preds.append(modelo(x_num_val, x_base_val, x_add_val))
+                # CORREÇÃO: Removido parênteses extras e desempacotando corretamente
+                for x_num_val, y_batch_val in loader_val:
+                    x_num_val, y_batch_val = x_num_val.to(dev), y_batch_val.to(dev)
+                    
+                    # CORREÇÃO: Passando apenas a feature correta para o modelo
+                    all_preds.append(modelo(x_num_val))
                     all_targets.append(y_batch_val)
 
             all_preds = torch.cat(all_preds)
@@ -369,7 +367,8 @@ def treinar_cv(
                 if best_val_mse < melhor_mse_absoluto:
                     melhor_mse_absoluto = best_val_mse
                     melhor_modelo_pesos = copy.deepcopy(modelo.state_dict())
-                    melhores_entradas_dummy = (x_num_val[[0]], x_base_val[[0]], x_add_val[[0]])
+                    # CORREÇÃO: Pegando o shape correto de dummy input retirando o excesso de parênteses
+                    melhores_entradas_dummy = x_num_val[[0]] 
             else:
                 epochs_sem_melhora += 1
                 if epochs_sem_melhora >= patience:
@@ -399,13 +398,11 @@ def treinar_cv(
             melhores_entradas_dummy, 
             buffer_memoria,  
             export_params=True,
-            input_names=["x_num", "x_base", "x_add"], 
+            input_names=["x_num"], 
             output_names=["outputs"], 
             dynamo=False,
             dynamic_axes={
                 "x_num": {0: "batch_size"},
-                "x_base": {0: "batch_size"},
-                "x_add": {0: "batch_size"},
                 "outputs": {0: "batch_size"}
             }
         )
