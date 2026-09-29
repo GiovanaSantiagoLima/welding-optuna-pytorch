@@ -30,7 +30,8 @@ def objective(trial: optuna.Trial) -> float:
         "activation":    trial.suggest_categorical("activation", ["relu", "gelu", "silu"]),
         "optimizer":     trial.suggest_categorical("optimizer", ["Adam", "AdamW", "SGD", "RMSprop"]),
         "criterion":     trial.suggest_categorical("criterion", ["MSELoss", "L1Loss", "HuberLoss"]),
-    }
+        "modo_interacao": trial.suggest_categorical("modo_interacao", [ "concat"])
+                }
     resultado = treinar_cv(
         params=params,
         data_path=DATA_PATH,

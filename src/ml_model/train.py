@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 import copy
+from data_prep.material import NUM_BUCKETS
 from dataset import criar_dataloaders,data_loader_cross_validation
 from model import RedeSoldagem
 
@@ -124,7 +125,7 @@ def treino(params: dict, data_path: str, epochs: int = 100, patience: int = 10, 
     # Modelo
     modelo = RedeSoldagem(
         num_features_continuas=num_features,
-        vocab_size=vocab_size,
+        num_buckets=NUM_BUCKETS,
         emb_dim=params["emb_dim"],
         hidden_size=params["hidden_size"],
         num_layers=params["num_layers"],
@@ -278,7 +279,6 @@ def treinar_cv(
     num_features = x_num.shape[1]
     
     dados = torch.load(data_path, weights_only=True)
-    vocab_size = int(max(dados["X_train_emb_base"].max(),dados["X_test_emb_base"].max(),dados["X_train_emb_add"].max(),dados["X_test_emb_add"].max()).item() + 1)
 
     # Pesos das saídas: [voltagem=1.0, amperagem=1.0, velocidade=2.0]
     pesos_loss = torch.tensor([1.0, 1.0, 2.0], device=dev)
@@ -293,7 +293,7 @@ def treinar_cv(
         
         modelo = RedeSoldagem(
             num_features_continuas=num_features,
-            vocab_size=vocab_size,
+            num_buckets=NUM_BUCKETS,
             emb_dim=params["emb_dim"],
             hidden_size=params["hidden_size"],
             num_layers=params["num_layers"],

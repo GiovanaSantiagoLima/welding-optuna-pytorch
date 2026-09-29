@@ -1,19 +1,44 @@
-import string
+import re
+import zlib
 
-PAD_TOKEN = "[PAD]" #preenchimento
-UNK_TOKEN = "[UNK]" #
+# ---------------------------------------------------------------------------
+# Tokenização por n-gramas de caracteres com hashing trick (estilo fastText).
+# Não há vocabulário fechado de n-gramas: qualquer n-grama, inclusive de
+# materiais nunca vistos, cai em algum bucket.
+# ---------------------------------------------------------------------------
+NGRAM_SIZES = (2, 3, 4)   # tamanhos dos n-gramas
+NUM_BUCKETS = 2048        # tamanho da "tabela hash" (ids de 1 a NUM_BUCKETS)
+MAX_NGRAMS = 128          # comprimento fixo da sequência de n-gramas
+PAD_IDX = 0               # índice de padding (buckets ocupam 1..NUM_BUCKETS)
 
-CHARS = list(string.ascii_uppercase) + list(string.digits)  # A-Z + 0-9
-VOCAB = [PAD_TOKEN, UNK_TOKEN] + CHARS
-CHAR2IDX = {ch: i for i, ch in enumerate(VOCAB)}
 
-MAX_LEN = 30  
+def normalizar(material: str) -> str:
+    """Maiúsculas e remove tudo que não for A-Z ou 0-9 (hífen, espaço etc.)."""
+    return re.sub(r"[^A-Z0-9]", "", material.upper())
+
+
+def char_ngrams(material: str, ns=NGRAM_SIZES) -> list:
+    """
+    Gera os n-gramas de caracteres do material, com marcadores de início '<'
+    e fim '>'. Ex.: 'A106' -> ['<A','A1','10','06','6>','<A1','A10',...]
+    """
+    s = f"<{normalizar(material)}>"
+    grams = []
+    for n in ns:
+        grams += [s[i:i + n] for i in range(len(s) - n + 1)]
+    return grams
+
 
 def encode(material: str) -> list:
-    material = material.upper().strip()  # normaliza
-    ids = [CHAR2IDX.get(ch, CHAR2IDX[UNK_TOKEN]) for ch in material]
-    ids = ids + [CHAR2IDX[PAD_TOKEN]] * (MAX_LEN - len(ids))
-    return ids[:MAX_LEN]
+    """
+    Converte o código do material em uma lista de tamanho MAX_NGRAMS com os
+    ids (buckets) dos n-gramas, preenchida com PAD_IDX.
+    Usa zlib.crc32 (determinístico), e não hash(), que muda a cada execução.
+    """
+    ids = [1 + zlib.crc32(g.encode()) % NUM_BUCKETS for g in char_ngrams(material)]
+    ids = ids[:MAX_NGRAMS]
+    return ids + [PAD_IDX] * (MAX_NGRAMS - len(ids))
+
 
 if __name__ == "__main__":
     import sys
@@ -22,67 +47,79 @@ if __name__ == "__main__":
 
     sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
-    from ml_model.model import MaterialEncoder
+    from ml_model.model import MaterialNgramEncoder, InteracaoMateriais
 
     print("=" * 50)
-    print("INFO DO VOCABULÁRIO")
+    print("INFO DA TOKENIZAÇÃO")
     print("=" * 50)
-    print("Vocabulário:", VOCAB)
-    print("Tamanho do vocabulário:", len(VOCAB))
-    print("Max len:", MAX_LEN)
+    print("Tamanhos de n-grama:", NGRAM_SIZES)
+    print("Buckets:", NUM_BUCKETS)
+    print("Max n-gramas:", MAX_NGRAMS)
 
     print("\n" + "=" * 50)
-    print("TESTE 1: Encode de materiais conhecidos")
+    print("TESTE 1: n-gramas e encode de materiais conhecidos")
     print("=" * 50)
-    materiais_conhecidos = ["A312TP316L", "A106", "API5LX65"]
-    for m in materiais_conhecidos:
+    for m in ["A312TP316L", "A106", "API5LX65"]:
+        grams = char_ngrams(m)
         ids = encode(m)
-        print(f"{m!r:20} -> {ids}")
+        print(f"{m!r:14} -> {len(grams)} n-gramas | primeiros: {grams[:6]}")
+        print(f"{'':14}    ids: {ids[:8]}...")
+        assert len(ids) == MAX_NGRAMS
+        assert all(0 <= i <= NUM_BUCKETS for i in ids)
 
     print("\n" + "=" * 50)
-    print("TESTE 2: Encode de material NUNCA VISTO antes")
+    print("TESTE 2: material NUNCA VISTO (sem vocabulário fechado, não quebra)")
     print("=" * 50)
-    materiais_novos = ["A999TP888", "XYZ123", "B7777N99999"]
-    for m in materiais_novos:
+    for m in ["A999TP888", "XYZ123", "B7777N99999"]:
         ids = encode(m)
-        print(f"{m!r:20} -> {ids}")
-        assert len(ids) == MAX_LEN, "Erro: tamanho da sequência não bate com MAX_LEN"
+        print(f"{m!r:14} -> {ids[:8]}...")
+        assert len(ids) == MAX_NGRAMS
 
     print("\n" + "=" * 50)
-    print("TESTE 3: Caractere fora do vocabulário (deve virar [UNK])")
+    print("TESTE 3: normalização (símbolos são removidos)")
     print("=" * 50)
-    material_com_simbolo = "A312-TP316L"  # hífen não está no vocabulário
-    ids = encode(material_com_simbolo)
-    unk_idx = CHAR2IDX["[UNK]"]
-    pos_hifen = material_com_simbolo.upper().index("-")
-    print(f"{material_com_simbolo!r:20} -> {ids}")
-    print(f"Índice de [UNK] é {unk_idx}, aparece na posição do '-': "
-          f"{ids[pos_hifen] == unk_idx}")
+    assert encode("A312-TP316L") == encode("A312TP316L")
+    assert encode("a312 tp316l") == encode("A312TP316L")
+    print("'A312-TP316L' e 'a312 tp316l' geram o mesmo encoding de 'A312TP316L': OK")
 
     print("\n" + "=" * 50)
-    print("TESTE 4: MaterialEncoder gerando vetores")
+    print("TESTE 4: determinismo (mesmo material -> mesmos ids)")
     print("=" * 50)
-    encoder = MaterialEncoder(vocab_size=len(VOCAB), embed_dim=16)
+    assert encode("A106") == encode("A106")
+    print("OK")
+
+    print("\n" + "=" * 50)
+    print("TESTE 5: encoder + interação")
+    print("=" * 50)
+    torch.manual_seed(0)
+    emb_dim = 16
+    encoder = MaterialNgramEncoder(num_buckets=NUM_BUCKETS, embed_dim=emb_dim)
+    interacao = InteracaoMateriais(emb_dim)
 
     pares = [
         ("A312TP316L", "A335P91"),   # par conhecido
         ("A999TP888", "XYZ123"),     # par nunca visto
     ]
-
     for base, adicao in pares:
         ids_base = torch.tensor([encode(base)])
         ids_adicao = torch.tensor([encode(adicao)])
 
-        vec_base = encoder(ids_base)
-        vec_adicao = encoder(ids_adicao)
+        e_b = encoder(ids_base)
+        e_f = encoder(ids_adicao)
+        e_int = interacao(e_b, e_f)
 
         print(f"\nBase: {base!r} | Adição: {adicao!r}")
-        print(f"  vec_base shape:   {vec_base.shape}")
-        print(f"  vec_adicao shape: {vec_adicao.shape}")
-        print(f"  vec_base[:5]:   {vec_base[0][:5]}")
-        print(f"  vec_adicao[:5]: {vec_adicao[0][:5]}")
+        print(f"  e_b shape:   {tuple(e_b.shape)}")
+        print(f"  e_f shape:   {tuple(e_f.shape)}")
+        print(f"  e_int shape: {tuple(e_int.shape)}")
 
-        assert vec_base.shape == (1, 16), "Erro: shape do vetor base incorreto"
-        assert vec_adicao.shape == (1, 16), "Erro: shape do vetor adição incorreto"
+        assert e_b.shape == (1, emb_dim)
+        assert e_f.shape == (1, emb_dim)
+        assert e_int.shape == (1, interacao.out_dim)
 
-    print("\n✅ Todos os testes passaram — encoder funciona com materiais novos e conhecidos.")
+    # Material vazio -> só padding -> vetor de zeros (sem NaN)
+    vazio = encoder(torch.tensor([encode("")]))
+    assert torch.isfinite(vazio).all()
+    print("\nMaterial vazio gera vetor finito (sem NaN): OK")
+
+    print("\n✅ Todos os testes passaram — encoder de n-gramas funciona com materiais novos e conhecidos.")
