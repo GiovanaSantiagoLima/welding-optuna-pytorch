@@ -2,7 +2,7 @@ import os
 import json
 import optuna
 from dotenv import load_dotenv
-from train import treinar_cv, treino, imprimir_metricas, OUTPUT_NAMES
+from .train import treinar_cv, treino, imprimir_metricas, OUTPUT_NAMES
 
 load_dotenv()
 DATA_PATH = os.getenv("DADOS_PROJETO")
@@ -30,8 +30,8 @@ def objective(trial: optuna.Trial) -> float:
         "activation":    trial.suggest_categorical("activation", ["relu", "gelu", "silu"]),
         "optimizer":     trial.suggest_categorical("optimizer", ["Adam", "AdamW", "SGD", "RMSprop"]),
         "criterion":     trial.suggest_categorical("criterion", ["MSELoss", "L1Loss", "HuberLoss"]),
-        "modo_interacao": trial.suggest_categorical("modo_interacao", [ "concat"])
-                }
+        "modo_interacao": trial.suggest_categorical("modo_interacao", ["concat"])
+    }
     resultado = treinar_cv(
         params=params,
         data_path=DATA_PATH,
@@ -68,7 +68,7 @@ def rodar_estudo():
     print(f"\n  Calculando métricas detalhadas do melhor trial...")
     resultado_melhor = treino(
         params=melhor.params,
-        data_path=DATA_PATH,
+        data_path="data/processed/dados_modelo_soldagem.pt",
         epochs=epochs_,
         patience=patience_,
     )

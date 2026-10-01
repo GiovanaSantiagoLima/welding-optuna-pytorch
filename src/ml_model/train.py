@@ -6,9 +6,9 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 import copy
-from data_prep.material import NUM_BUCKETS
-from dataset import criar_dataloaders,data_loader_cross_validation
-from model import RedeSoldagem
+from src.data_prep.material import NUM_BUCKETS
+from .dataset import criar_dataloaders,data_loader_cross_validation
+from .model import RedeSoldagem
 
 OUTPUT_NAMES = ["voltagem", "amperagem", "velocidade"]
 
@@ -130,6 +130,7 @@ def treino(params: dict, data_path: str, epochs: int = 100, patience: int = 10, 
         hidden_size=params["hidden_size"],
         num_layers=params["num_layers"],
         dropout_rate=params["dropout_rate"],
+        modo_interacao=params.get("modo_interacao", "interacao"),
     ).to(dev)
 
     # Otimizador
@@ -272,6 +273,7 @@ def treinar_cv(
         device = "cuda" if torch.cuda.is_available() else "cpu"
     dev = torch.device(device)
     print(f"[train] Dispositivo: {dev}")
+    data_path = "data/processed/dados_modelo_soldagem.pt"
 
     batch_size = params.get("batch_size", 32)
     dataloaders_folds = data_loader_cross_validation(data_path, batch_size=batch_size, k_folds=k_folds)
@@ -298,6 +300,7 @@ def treinar_cv(
             hidden_size=params["hidden_size"],
             num_layers=params["num_layers"],
             dropout_rate=params["dropout_rate"],
+            modo_interacao=params.get("modo_interacao", "interacao"),
         ).to(dev)
 
         opt_name = params.get("optimizer", "AdamW")

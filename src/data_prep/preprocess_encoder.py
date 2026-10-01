@@ -1,3 +1,4 @@
+from sympy import series
 import torch
 import joblib
 import os
@@ -8,6 +9,8 @@ from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
+
+from data_prep.material import MAX_NGRAMS, NGRAM_SIZES, NUM_BUCKETS, encode, NUM, encode_BUCKETS
 
 def preprocessar_encoder(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -69,31 +72,19 @@ def preprocessar_encoder(df: pd.DataFrame) -> pd.DataFrame:
     X_test_num_cat = preprocessor.transform(X_test)
     
     #Tratamento para Embeddings (Alta Cardinalidade)
-    def criar_mapping(series):
-        categorias = series.dropna().unique()
-        return {cat: i+1 for i, cat in enumerate(categorias)}
+    from data_prep.material import MAX_NGRAMS, NGRAM_SIZES, NUM_BUCKETS, encode
 
-    map_base = criar_mapping(X_train["material_base"])
-    map_add = criar_mapping(X_train["material_adicao"])
-    
-    
-    def aplicar_mapping(df_col, mapping):
-        return df_col.map(lambda x: mapping.get(x, 0)).values
+    def tokenizar(series):
+        cache = {m: encode(str(m)) for m in series.dropna().unique()}
+        vazio = encode("")
+        return np.array([cache.get(m, vazio) for m in series], dtype=np.int64)  
 
-    X_train_emb_base = aplicar_mapping(X_train["material_base"], map_base)
-    X_train_emb_add = aplicar_mapping(X_train["material_adicao"], map_add)
-    X_test_emb_base = aplicar_mapping(X_test["material_base"], map_base)
-    X_test_emb_add = aplicar_mapping(X_test["material_adicao"], map_add)
+    X_train_emb_base = tokenizar(X_train["material_base"])
+    X_train_emb_add  = tokenizar(X_train["material_adicao"])
+    X_test_emb_base  = tokenizar(X_test["material_base"])
+    X_test_emb_add   = tokenizar(X_test["material_adicao"])
 
-    # Agrupando os mapeamentos caso precise saber o tamanho do vocabulário para a Rede Neural
-    mappings = {
-        'material_base': map_base, 
-        'material_adicao': map_add,
-        'vocab_sizes': {
-            'material_base': len(map_base) + 1, # +1 por causa do UNK
-            'material_adicao': len(map_add) + 1
-        }
-    }
+    mappings = {"ngram": {"ngram_sizes": NGRAM_SIZES, "num_buckets": NUM_BUCKETS, "max_ngrams": MAX_NGRAMS}}
 
     return (
         X_train_num_cat, X_test_num_cat, 
@@ -139,16 +130,16 @@ def salvar_dados_como_tensores(resultados_preprocessamento: tuple, nome_base_arq
     
     # Salva os objetos utilitários usando joblib 
     caminho_prep = "preprocessor_v1.joblib"
-    caminho_maps = "mappings_v1.joblib"
+    caminho_token = "token_v1.joblib"
     caminho_yscaler = "yscaler_v1.joblib"
     joblib.dump(preprocessor, caminho_prep)
-    joblib.dump(mappings, caminho_maps)
+    joblib.dump(mappings, caminho_token)
     joblib.dump(y_scaler, caminho_yscaler)
     
     print(f"\n✅ Concluído! Arquivos gerados com sucesso:")
     print(f"   -> {caminho_tensores}")
     print(f"   -> {caminho_prep}")
-    print(f"   -> {caminho_maps}")
+    print(f"   -> {caminho_token}")
     print(f"   -> {caminho_yscaler}")
 
 def main()-> None:
