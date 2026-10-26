@@ -1,55 +1,88 @@
+# model.py
 import torch
 import torch.nn as nn
 
+class MaterialNgramEncoder(nn.Module):
+    """
+    Embedding de n-gramas (hashing) + média ignorando padding.
+    Entrada esperada: (batch, MAX_NGRAMS) com ids inteiros (0 = padding).
+    Se chegar (batch,), é tratado como (batch, 1) para não quebrar.
+    Saída: (batch, embed_dim)
+    """
+    def __init__(self, num_buckets: int, embed_dim: int, pad_idx: int = 0):
+        super().__init__()
+        self.embedding = nn.Embedding(num_buckets + 1, embed_dim, padding_idx=pad_idx)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.dim() == 1:
+            x = x.unsqueeze(1)                      
+        x = x.long()
+        emb = self.embedding(x)                     
+        mask = (x != 0).unsqueeze(-1).to(emb.dtype)  
+        soma = (emb * mask).sum(dim=1) 
+        return soma / mask.sum(dim=1).clamp(min=1)  
+
+
+def _ativacao(nome: str) -> nn.Module:
+    nome = nome.lower()
+    if nome == "relu":
+        return nn.ReLU()
+    if nome == "leakyrelu" or nome == "leaky_relu":
+        return nn.LeakyReLU()
+    if nome == "gelu":
+        return nn.GELU()
+    if nome == "tanh":
+        return nn.Tanh()
+    if nome == "silu":
+        return nn.SiLU()
+    raise ValueError(f"Ativação desconhecida: {nome}")
+
+
 class RedeSoldagem(nn.Module):
     """
-    Arquitetura da Rede Neural para previsão de parâmetros de soldagem (Regressão Multi-Output).
-    
-    Utiliza camadas de Embedding para processar variáveis categóricas de alta
-    cardinalidade (materiais) e camadas lineares densas (Fully Connected) para as
-    features contínuas e codificadas via One-Hot. A profundidade e largura da rede
-    são parametrizáveis para facilitar a otimização de hiperparâmetros.
+    Rede para previsão de parâmetros de soldagem (regressão multi-output).
+
+    Um MaterialNgramEncoder compartilhado gera um vetor para o material base e
+    outro para o material de adição; os dois são concatenados às demais features
+    (contínuas + one-hot) e passam por camadas densas.
+
+    Saídas: (Voltagem, Amperagem, Velocidade de Soldagem).
     """
-    def __init__(self, num_features_continuas: int,vocab_base_size: int, vocab_add_size: int, emb_dim: int = 8, 
-                 hidden_size: int = 64,num_layers: int = 2,dropout_rate: float = 0.2):
-        """
-        Inicializa as camadas e a estrutura da rede neural.
-        """
-        super(RedeSoldagem, self).__init__()
-        self.emb_base = nn.Embedding(num_embeddings=vocab_base_size, embedding_dim=emb_dim)
-        self.emb_add = nn.Embedding(num_embeddings=vocab_add_size, embedding_dim=emb_dim)
-        dimensao_total_entrada = num_features_continuas + (emb_dim * 2)
-        
+
+    def __init__(self, num_features_continuas: int, num_buckets: int, emb_dim: int = 16,
+                 hidden_size: int = 64, num_layers: int = 2, dropout_rate: float = 0.2,
+                 modo_interacao: str = "concat", activation: str = "relu"):
+        super().__init__()
+
+        if modo_interacao != "concat":
+            raise ValueError("Apenas o modo 'concat' é suportado.")
+
+        self.material_encoder = MaterialNgramEncoder(num_buckets=num_buckets, embed_dim=emb_dim)
+
+        tamanho_entrada = num_features_continuas + emb_dim * 2
+
         camadas = []
-        tamanho_entrada_atual = dimensao_total_entrada
-        
-        for i in range(num_layers):
-            camadas.append(nn.Linear(tamanho_entrada_atual, hidden_size))
-            camadas.append(nn.ReLU())
+        for _ in range(num_layers):
+            camadas.append(nn.Linear(tamanho_entrada, hidden_size))
+            camadas.append(_ativacao(activation))
             camadas.append(nn.BatchNorm1d(hidden_size))
             camadas.append(nn.Dropout(dropout_rate))
-            
-            tamanho_entrada_atual = hidden_size 
-        
+            tamanho_entrada = hidden_size
+
         self.camadas_ocultas = nn.Sequential(*camadas)
-        
         self.camada_saida = nn.Linear(hidden_size, 3)
 
-    def forward(self, x_num_cat: torch.Tensor, x_emb_base: torch.Tensor, x_emb_add: torch.Tensor) -> torch.Tensor:
+    def forward(self, x_num_cat: torch.Tensor, x_material_base: torch.Tensor,
+                x_material_add: torch.Tensor) -> torch.Tensor:
         """
-        Define o fluxo de passagem direta (forward pass) dos dados pela rede.
-
-        Retorna
-        -------
-        torch.Tensor:Tensor de formato [batch_size, 3] contendo as previsões da rede.As saídas correspondem a (Voltagem, Amperagem, Velocidade de Soldagem).
+        x_num_cat:       (batch, num_features_continuas)
+        x_material_base: (batch, MAX_NGRAMS)
+        x_material_add:  (batch, MAX_NGRAMS)
+        Retorna:         (batch, 3)
         """
-        
-        vec_base = self.emb_base(x_emb_base)
-        vec_add = self.emb_add(x_emb_add)
-        x_combinado = torch.cat([x_num_cat, vec_base, vec_add], dim=1)
-        
-        x_processado = self.camadas_ocultas(x_combinado)
-        
-        previsao = self.camada_saida(x_processado)
+        e_b = self.material_encoder(x_material_base)   # (batch, emb_dim)
+        e_f = self.material_encoder(x_material_add)    # (batch, emb_dim)
 
-        return previsao
+        x = torch.cat([x_num_cat, e_b, e_f], dim=1)
+        x = self.camadas_ocultas(x)
+        return self.camada_saida(x)

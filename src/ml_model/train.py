@@ -6,8 +6,9 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 import copy
-from dataset import criar_dataloaders,data_loader_cross_validation
-from model import RedeSoldagem
+from src.data_prep.material import NUM_BUCKETS
+from .dataset import criar_dataloaders,data_loader_cross_validation
+from .model import RedeSoldagem
 
 OUTPUT_NAMES = ["voltagem", "amperagem", "velocidade"]
 
@@ -119,18 +120,17 @@ def treino(params: dict, data_path: str, epochs: int = 100, patience: int = 10, 
     (x_num, x_base, x_add), _ = next(iter(loader_treino))
     num_features = x_num.shape[1]
     dados = torch.load(data_path, weights_only=True)
-    vocab_base = int(dados["X_train_emb_base"].max().item() + 1)
-    vocab_add  = int(dados["X_train_emb_add"].max().item() + 1)
+    vocab_size = int(max(dados["X_train_emb_base"].max(),dados["X_train_emb_add"].max()).item() + 1)
 
     # Modelo
     modelo = RedeSoldagem(
         num_features_continuas=num_features,
-        vocab_base_size=vocab_base,
-        vocab_add_size=vocab_add,
+        num_buckets=NUM_BUCKETS,
         emb_dim=params["emb_dim"],
         hidden_size=params["hidden_size"],
         num_layers=params["num_layers"],
         dropout_rate=params["dropout_rate"],
+        modo_interacao=params.get("modo_interacao", "interacao"),
     ).to(dev)
 
     # Otimizador
@@ -273,6 +273,7 @@ def treinar_cv(
         device = "cuda" if torch.cuda.is_available() else "cpu"
     dev = torch.device(device)
     print(f"[train] Dispositivo: {dev}")
+    data_path = "data/processed/dados_modelo_soldagem.pt"
 
     batch_size = params.get("batch_size", 32)
     dataloaders_folds = data_loader_cross_validation(data_path, batch_size=batch_size, k_folds=k_folds)
@@ -280,8 +281,6 @@ def treinar_cv(
     num_features = x_num.shape[1]
     
     dados = torch.load(data_path, weights_only=True)
-    vocab_base = int(max(dados["X_train_emb_base"].max(), dados["X_test_emb_base"].max()).item() + 1)
-    vocab_add  = int(max(dados["X_train_emb_add"].max(), dados["X_test_emb_add"].max()).item() + 1)
 
     # Pesos das saídas: [voltagem=1.0, amperagem=1.0, velocidade=2.0]
     pesos_loss = torch.tensor([1.0, 1.0, 2.0], device=dev)
@@ -296,12 +295,12 @@ def treinar_cv(
         
         modelo = RedeSoldagem(
             num_features_continuas=num_features,
-            vocab_base_size=vocab_base,
-            vocab_add_size=vocab_add,
+            num_buckets=NUM_BUCKETS,
             emb_dim=params["emb_dim"],
             hidden_size=params["hidden_size"],
             num_layers=params["num_layers"],
             dropout_rate=params["dropout_rate"],
+            modo_interacao=params.get("modo_interacao", "concat"),
         ).to(dev)
 
         opt_name = params.get("optimizer", "AdamW")
