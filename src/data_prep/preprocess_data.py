@@ -246,7 +246,7 @@ def preprocessar_dados_gases(df: pd.DataFrame) -> pd.DataFrame:
     return df 
 
 def main():
-    nome_arquivo = 'data/processed/dados_reestruturados.csv'
+    nome_arquivo = 'data/raw/dados_reestruturados.csv'
     print(f"Carregando os dados do arquivo: {nome_arquivo}...")
     try:
         df = pd.read_csv(nome_arquivo, sep=';') 
@@ -261,7 +261,7 @@ def main():
     df_processado = excluir_linhas_indesejadas(df_processado)
     df_processado = preprocessar_dados_gases(df_processado)
 
-    arquivo_saida = 'data/dados_preprocessados.csv'
+    arquivo_saida = 'data/processed/dados_preprocessados.csv'
     df_processado.to_csv(arquivo_saida, index=False)
 
     print(f"Dados salvos como '{arquivo_saida}'.")

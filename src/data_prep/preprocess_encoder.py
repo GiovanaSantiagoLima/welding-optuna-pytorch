@@ -1,4 +1,5 @@
 from sympy import series
+from pathlib import Path
 import torch
 import joblib
 import os
@@ -9,8 +10,6 @@ from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
-
-from data_prep.material import MAX_NGRAMS, NGRAM_SIZES, NUM_BUCKETS, encode, NUM, encode_BUCKETS
 
 def preprocessar_encoder(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -38,7 +37,7 @@ def preprocessar_encoder(df: pd.DataFrame) -> pd.DataFrame:
             - y_train (np.ndarray): Matriz com as 3 variáveis alvo de treino.
             - y_test (np.ndarray): Matriz com as 3 variáveis alvo de teste.
             - preprocessor (ColumnTransformer): O transformador ajustado (útil para dados futuros).
-            - mappings (dict): Dicionário com os mapas dos materiais e tamanhos de vocabulário.
+            - tokens (dict): Dicionário com os tokens dos materiais e tamanhos de vocabulário.
     """
     df = df.copy()
     
@@ -72,8 +71,11 @@ def preprocessar_encoder(df: pd.DataFrame) -> pd.DataFrame:
     X_test_num_cat = preprocessor.transform(X_test)
     
     #Tratamento para Embeddings (Alta Cardinalidade)
-    from data_prep.material import MAX_NGRAMS, NGRAM_SIZES, NUM_BUCKETS, encode
+    NGRAM_SIZES = (1,2)   # tamanhos dos n-gramas
+    NUM_BUCKETS = 2048        # tamanho da "tabela hash" (ids de 1 a NUM_BUCKETS)
+    MAX_NGRAMS = 128  
 
+    from src.data_prep.material import encode
     def tokenizar(series):
         cache = {m: encode(str(m)) for m in series.dropna().unique()}
         vazio = encode("")
@@ -84,14 +86,14 @@ def preprocessar_encoder(df: pd.DataFrame) -> pd.DataFrame:
     X_test_emb_base  = tokenizar(X_test["material_base"])
     X_test_emb_add   = tokenizar(X_test["material_adicao"])
 
-    mappings = {"ngram": {"ngram_sizes": NGRAM_SIZES, "num_buckets": NUM_BUCKETS, "max_ngrams": MAX_NGRAMS}}
+    tokens = {"ngram": {"ngram_sizes": NGRAM_SIZES, "num_buckets": NUM_BUCKETS, "max_ngrams": MAX_NGRAMS}}
 
     return (
         X_train_num_cat, X_test_num_cat, 
         X_train_emb_base, X_test_emb_base, 
         X_train_emb_add, X_test_emb_add, 
         y_train_scaled, y_test_scaled, 
-        preprocessor, mappings, y_scaler)
+        preprocessor, tokens, y_scaler)
 
 def salvar_dados_como_tensores(resultados_preprocessamento: tuple, nome_base_arquivo: str = 'dados_soldagem') -> None:
     """
@@ -106,10 +108,10 @@ def salvar_dados_como_tensores(resultados_preprocessamento: tuple, nome_base_arq
         None: A função não retorna nada, apenas salva os arquivos no diretório atual:
               - {nome_base_arquivo}.pt (Contém o dicionário com todos os tensores)
               - {nome_base_arquivo}_preprocessor.joblib (Objeto do Scikit-Learn)
-              - {nome_base_arquivo}_mappings.joblib (Dicionário de mapeamentos e vocabulário)
+              - {nome_base_arquivo}_tokens.joblib (Dicionário de mapeamentos e vocabulário)
     """
-    
-    (X_train_num_cat, X_test_num_cat, X_train_emb_base, X_test_emb_base, X_train_emb_add, X_test_emb_add, y_train, y_test, preprocessor, mappings, y_scaler) = resultados_preprocessamento
+    BASE_DIR = Path(__file__).resolve().parents[2]
+    (X_train_num_cat, X_test_num_cat, X_train_emb_base, X_test_emb_base, X_train_emb_add, X_test_emb_add, y_train, y_test, preprocessor, tokens, y_scaler) = resultados_preprocessamento
 
     #Convertendo para tensores    
     X_train_num_tensor = torch.tensor(X_train_num_cat, dtype=torch.float32)
@@ -122,18 +124,28 @@ def salvar_dados_como_tensores(resultados_preprocessamento: tuple, nome_base_arq
     X_test_emb_add_tensor = torch.tensor(X_test_emb_add, dtype=torch.long)
 
     
-    caminho_tensores = f"{nome_base_arquivo}.pt"
+    caminho_saida_tensores = BASE_DIR / "data" / "processed"
+    caminho_saida_artefatos = BASE_DIR / "data" / "artifacts"
+    caminho_saida_tensores.mkdir(parents=True, exist_ok=True)
+    caminho_saida_artefatos.mkdir(parents=True, exist_ok=True)
+    
+    # Define os caminhos completos dos arquivos
+    caminho_tensores = caminho_saida_tensores / f"{nome_base_arquivo}.pt"
+    caminho_prep = caminho_saida_artefatos / "preprocessor_v1.joblib"
+    caminho_token = caminho_saida_artefatos / "token_v1.joblib"
+    caminho_yscaler = caminho_saida_artefatos / "yscaler_v1.joblib"
+
+    # Salva os tensores
     torch.save({
-        'X_train_num': X_train_num_tensor, 'X_test_num': X_test_num_tensor,'X_train_emb_base': X_train_emb_base_tensor,
-        'X_test_emb_base': X_test_emb_base_tensor,'X_train_emb_add': X_train_emb_add_tensor,'X_test_emb_add': X_test_emb_add_tensor,
-        'y_train': y_train_tensor,'y_test': y_test_tensor}, caminho_tensores)
+        'X_train_num': X_train_num_tensor, 'X_test_num': X_test_num_tensor,
+        'X_train_emb_base': X_train_emb_base_tensor, 'X_test_emb_base': X_test_emb_base_tensor,
+        'X_train_emb_add': X_train_emb_add_tensor, 'X_test_emb_add': X_test_emb_add_tensor,
+        'y_train': y_train_tensor, 'y_test': y_test_tensor
+    }, caminho_tensores)
     
     # Salva os objetos utilitários usando joblib 
-    caminho_prep = "preprocessor_v1.joblib"
-    caminho_token = "token_v1.joblib"
-    caminho_yscaler = "yscaler_v1.joblib"
     joblib.dump(preprocessor, caminho_prep)
-    joblib.dump(mappings, caminho_token)
+    joblib.dump(tokens, caminho_token)
     joblib.dump(y_scaler, caminho_yscaler)
     
     print(f"\n✅ Concluído! Arquivos gerados com sucesso:")
@@ -143,20 +155,23 @@ def salvar_dados_como_tensores(resultados_preprocessamento: tuple, nome_base_arq
     print(f"   -> {caminho_yscaler}")
 
 def main()-> None:
-    caminho_dados = 'data/processed/dados_preprocessados.csv' 
-    print(f"Iniciando o processamento do arquivo: {caminho_dados}")
+    DIRETORIO_RAIZ = Path(__file__).resolve().parents[2]
+    CAMINHO_FICHEIRO = DIRETORIO_RAIZ / "data" / "processed" / "dados_preprocessados.csv"
+    print(f"Iniciando o processamento do arquivo: {CAMINHO_FICHEIRO}")
     
     try:
-        df_bruto = pd.read_csv(caminho_dados) 
+        df_bruto = pd.read_csv(CAMINHO_FICHEIRO) 
         print("\nExecutando o pipeline de pré-processamento e codificação...")
         resultados = preprocessar_encoder(df_bruto)
         print("\nConvertendo para tensores PyTorch e salvando artefatos...")
         salvar_dados_como_tensores(resultados, nome_base_arquivo='dados_modelo_soldagem')
         
     except FileNotFoundError:
-        print(f"❌ Erro: O arquivo '{caminho_dados}' não foi encontrado no diretório atual.")
+        print(f"❌ Erro: O arquivo '{CAMINHO_FICHEIRO}' não foi encontrado no diretório atual.")
     except Exception as e:
         print(f"❌ Ocorreu um erro durante a execução: {e}")
 
+
 if __name__ == "__main__":
+
     main()

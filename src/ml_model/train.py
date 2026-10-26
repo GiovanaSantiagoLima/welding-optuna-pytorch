@@ -300,7 +300,7 @@ def treinar_cv(
             hidden_size=params["hidden_size"],
             num_layers=params["num_layers"],
             dropout_rate=params["dropout_rate"],
-            modo_interacao=params.get("modo_interacao", "interacao"),
+            modo_interacao=params.get("modo_interacao", "concat"),
         ).to(dev)
 
         opt_name = params.get("optimizer", "AdamW")

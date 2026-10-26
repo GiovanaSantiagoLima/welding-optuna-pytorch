@@ -14,7 +14,7 @@ def carregar_dados() -> pd.DataFrame:
     """
   
     load_dotenv()
-    DATA_PATH = os.getenv("CAMINHO_DOS_DADOS")
+    DATA_PATH = r'C:\Users\Workstation\Documents\GitHub\welding-optuna-pytorch\data\raw\all_data.csv'
     df = pd.read_csv(DATA_PATH, sep=';')
     return df
 
