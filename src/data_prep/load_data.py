@@ -101,12 +101,16 @@ def preparar_dataframe(df):
 
 def salvar_dados(df: pd.DataFrame) -> None:
     """
-    Salva os dados processados no caminho definido pela variável de ambiente CAMINHO_DADOS_TRATADOS.
+    Salva os dados processados no diretório data/processed.
     """
     load_dotenv()
-    OUTPUT_PATH = os.getenv("CAMINHO_DADOS_REESTRUTURADOS")
-    print(f"Salvando em: {os.path.abspath(OUTPUT_PATH)}")
-    df.to_csv( OUTPUT_PATH, sep=';', index=False )
+    output_dir = "data/processed"
+    os.makedirs(output_dir, exist_ok=True)
+    
+    output_path = os.getenv("CAMINHO_DADOS_REESTRUTURADOS", os.path.join(output_dir, "dados_reestruturados.csv"))
+    
+    print(f"Salvando em: {os.path.abspath(output_path)}")
+    df.to_csv(output_path, sep=';', index=False)
 
 def main() -> None: 
     print("Carregando dados")
