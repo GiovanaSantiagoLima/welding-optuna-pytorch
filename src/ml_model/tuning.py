@@ -1,10 +1,14 @@
 import os
 import json
+from zipfile import Path
 import optuna
 from dotenv import load_dotenv
 from .train import treinar_cv, treino, imprimir_metricas, OUTPUT_NAMES
 
 load_dotenv()
+RAIZ_PROJETO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+load_dotenv(os.path.join(RAIZ_PROJETO, ".env"))
+
 DATA_PATH = os.getenv("DADOS_PROJETO")
 
 #Configurações do estudo 
@@ -20,7 +24,7 @@ def objective(trial: optuna.Trial) -> float:
     O Optuna maximiza esse valor.
     """
     params = {
-        "hidden_size":   trial.suggest_categorical("hidden_size", [128, 256]),
+        "hidden_size":   trial.suggest_categorical("hidden_size", [16, 64]),
         "num_layers":    trial.suggest_int("num_layers", 2, 3),
         "learning_rate": trial.suggest_float("learning_rate", 1e-4, 1e-2, log=True),
         "dropout_rate":  trial.suggest_float("dropout_rate", 0.0, 0.15),
@@ -28,9 +32,8 @@ def objective(trial: optuna.Trial) -> float:
         "batch_size":    trial.suggest_categorical("batch_size", [32, 64, 128]),
         "weight_decay":  trial.suggest_float("weight_decay", 1e-4, 1e-3, log=True),
         "activation":    trial.suggest_categorical("activation", ["relu", "gelu", "silu"]),
-        "optimizer":     trial.suggest_categorical("optimizer", ["Adam", "AdamW", "SGD", "RMSprop"]),
+        "optimizer":     trial.suggest_categorical("optimizer", ["Adam", "AdamW", "RMSprop"]),
         "criterion":     trial.suggest_categorical("criterion", ["MSELoss", "L1Loss", "HuberLoss"]),
-        "modo_interacao": trial.suggest_categorical("modo_interacao", ["concat"])
     }
     resultado = treinar_cv(
         params=params,
@@ -40,14 +43,14 @@ def objective(trial: optuna.Trial) -> float:
         k_folds=3,           
         exportar_onnx=False  
     )
-    return resultado["best_val_mse"],resultado["best_val_r2"]  # Minimizar MSE e maximizar R2
+    return resultado["best_val_r2"]  # Minimizar MSE e maximizar R2
 
 
 def rodar_estudo():
     """Cria ou continua o estudo Optuna e salva os resultados."""
 
     study = optuna.create_study(
-        directions=["minimize", "maximize"],  # Minimizar MAE e maximizar R2
+        direction="maximize",  # Maximizar R2
         sampler=optuna.samplers.TPESampler(seed=42),
         pruner=optuna.pruners.MedianPruner(n_warmup_steps=10),
     )
@@ -68,7 +71,7 @@ def rodar_estudo():
     print(f"\n  Calculando métricas detalhadas do melhor trial...")
     resultado_melhor = treino(
         params=melhor.params,
-        data_path="data/processed/dados_modelo_soldagem.pt",
+        data_path=DATA_PATH,
         epochs=epochs_,
         patience=patience_,
     )
@@ -130,9 +133,9 @@ def treinar_modelo_final(json_path: str = "melhor_trial.json"):
     resultado = treinar_cv(
         params=params,
         data_path=DATA_PATH,
-        epochs=300,        
+        epochs=100,        
         patience=30,       
-        k_folds=5,         
+        k_folds=3,         
         exportar_onnx=True,
         onnx_path="melhor_modelo_producao.onnx"
     )
