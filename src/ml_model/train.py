@@ -130,7 +130,8 @@ def treino(params: dict, data_path: str, epochs: int = 100, patience: int = 10, 
         hidden_size=params["hidden_size"],
         num_layers=params["num_layers"],
         dropout_rate=params["dropout_rate"],
-        modo_interacao=params.get("modo_interacao", "interacao"),
+        modo_interacao=params.get("modo_interacao", "concat"),
+        activation=params.get("activation", "relu")
     ).to(dev)
 
     # Otimizador
@@ -273,7 +274,6 @@ def treinar_cv(
         device = "cuda" if torch.cuda.is_available() else "cpu"
     dev = torch.device(device)
     print(f"[train] Dispositivo: {dev}")
-    data_path = "data/processed/dados_modelo_soldagem.pt"
 
     batch_size = params.get("batch_size", 32)
     dataloaders_folds = data_loader_cross_validation(data_path, batch_size=batch_size, k_folds=k_folds)
@@ -282,8 +282,8 @@ def treinar_cv(
     
     dados = torch.load(data_path, weights_only=True)
 
-    # Pesos das saídas: [voltagem=1.0, amperagem=1.0, velocidade=2.0]
-    pesos_loss = torch.tensor([1.0, 1.0, 2.0], device=dev)
+    # Pesos das saídas: [voltagem=1.0, amperagem=1.0, velocidade=4.0]
+    pesos_loss = torch.tensor([0.2, 0.3, 0.5], device=dev)
 
     metricas_folds = []
     melhor_mse_absoluto = float("inf")
@@ -301,6 +301,7 @@ def treinar_cv(
             num_layers=params["num_layers"],
             dropout_rate=params["dropout_rate"],
             modo_interacao=params.get("modo_interacao", "concat"),
+            activation=params.get("activation", "relu")
         ).to(dev)
 
         opt_name = params.get("optimizer", "AdamW")
