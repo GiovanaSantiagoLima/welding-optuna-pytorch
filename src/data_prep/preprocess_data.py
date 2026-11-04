@@ -242,22 +242,7 @@ def preprocessar_dados_gases(df: pd.DataFrame) -> pd.DataFrame:
     
     return df 
 
-def calcular_frequencias_materiais(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Calcula a frequência global (normalizada) dos materiais base e de adição
-    e cria as colunas numéricas correspondentes ('material_base_freq' e 'material_adicao_freq').
-    """
-    df = df.copy()
-    
-    # Frequência global do material base
-    freq_map_base = df['material_base'].value_counts(normalize=True).to_dict()
-    df['material_base_freq'] = df['material_base'].map(freq_map_base).fillna(0.0)
-    
-    # Frequência global do material de adição
-    freq_map_add = df['material_adicao'].value_counts(normalize=True).to_dict()
-    df['material_adicao_freq'] = df['material_adicao'].map(freq_map_add).fillna(0.0)
-    
-    return df
+
 
 def main():
     nome_arquivo = 'data/processed/dados_reestruturados.csv'
@@ -274,7 +259,6 @@ def main():
     df_processado = preencher_nulos(df_processado)
     df_processado = excluir_linhas_indesejadas(df_processado)
     df_processado = preprocessar_dados_gases(df_processado)
-    df_processado = calcular_frequencias_materiais(df_processado)
     arquivo_saida = 'data/processed/dados_preprocessados.csv'
     df_processado.to_csv(arquivo_saida, index=False)
 
