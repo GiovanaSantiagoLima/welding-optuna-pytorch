@@ -42,11 +42,9 @@ class RedeSoldagem(nn.Module):
     """
     Rede para previsão de parâmetros de soldagem (regressão multi-output).
 
-    Um MaterialNgramEncoder compartilhado gera um vetor para o material base e
-    outro para o material de adição; os dois são concatenados às demais features
-    (contínuas + one-hot) e passam por camadas densas.
-
-    Saídas: (Voltagem, Amperagem, Velocidade de Soldagem).
+    Utiliza arquitetura Multi-Head: um tronco compartilhado processa as 
+    features contínuas e embeddings (n-gramas), dividindo-se no final em 
+    três redes independentes focadas em Voltagem, Amperagem e Velocidade.
     """
 
     def __init__(self, num_features_continuas: int, num_buckets: int, emb_dim: int = 16,
@@ -58,11 +56,9 @@ class RedeSoldagem(nn.Module):
             raise ValueError("Apenas o modo 'concat' é suportado.")
 
         self.material_encoder = MaterialNgramEncoder(num_buckets=num_buckets, embed_dim=emb_dim)
+        tamanho_entrada = num_features_continuas + (emb_dim * 2)
 
-        # Se você adicionar 2 colunas extras (frequência do base + frequência da adição) 
-        # nas features numéricas, o tamanho da entrada aumenta em +2 automaticamente:
-        tamanho_entrada = num_features_continuas + 2 + (emb_dim * 2)
-
+        # Tronco Compartilhado
         camadas = []
         for _ in range(num_layers):
             camadas.append(nn.Linear(tamanho_entrada, hidden_size))
@@ -72,22 +68,41 @@ class RedeSoldagem(nn.Module):
             tamanho_entrada = hidden_size
 
         self.camadas_ocultas = nn.Sequential(*camadas)
-        self.camada_saida = nn.Linear(hidden_size, 3)
 
-    def forward(self, x_num_cat: torch.Tensor, x_freqs: torch.Tensor, 
+        # Cabeças Independentes (Multi-Head)
+        dimensao_head = max(hidden_size // 2, 8)
+        
+        self.head_voltagem = nn.Sequential(
+            nn.Linear(hidden_size, dimensao_head),
+            _ativacao(activation),
+            nn.Linear(dimensao_head, 1)
+        )
+        
+        self.head_amperagem = nn.Sequential(
+            nn.Linear(hidden_size, dimensao_head),
+            _ativacao(activation),
+            nn.Linear(dimensao_head, 1)
+        )
+        
+        self.head_velocidade = nn.Sequential(
+            nn.Linear(hidden_size, dimensao_head),
+            _ativacao(activation),
+            nn.Linear(dimensao_head, 1)
+        )
+
+    def forward(self, x_num_cat: torch.Tensor,  
                 x_material_base: torch.Tensor, x_material_add: torch.Tensor) -> torch.Tensor:
         """
-        x_num_cat:       (batch, num_features_continuas)
-        x_freqs:         (batch, 2) -> [freq_material_base, freq_material_add]
-        x_material_base: (batch, MAX_NGRAMS)
-        x_material_add:  (batch, MAX_NGRAMS)
-        Retorna:         (batch, 3)
+        Retorna as predições concatenadas: (batch, 3) -> [Voltagem, Amperagem, Velocidade]
         """
-        e_b = self.material_encoder(x_material_base)   # (batch, emb_dim)
-        e_f = self.material_encoder(x_material_add)    # (batch, emb_dim)
+        e_b = self.material_encoder(x_material_base)
+        e_f = self.material_encoder(x_material_add)
 
-        # Junta as features contínuas, as frequências explícitas e os embeddings dos n-gramas
-        x = torch.cat([x_num_cat, x_freqs, e_b, e_f], dim=1)
+        x = torch.cat([x_num_cat, e_b, e_f], dim=1)
+        x_compartilhado = self.camadas_ocultas(x)
         
-        x = self.camadas_ocultas(x)
-        return self.camada_saida(x)
+        out_v = self.head_voltagem(x_compartilhado)
+        out_a = self.head_amperagem(x_compartilhado)
+        out_vel = self.head_velocidade(x_compartilhado)
+        
+        return torch.cat([out_v, out_a, out_vel], dim=1)
