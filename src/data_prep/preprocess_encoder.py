@@ -7,7 +7,7 @@ import numpy as np
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.preprocessing import PowerTransformer, StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 
 def preprocessar_encoder(df: pd.DataFrame) -> pd.DataFrame:
@@ -46,11 +46,12 @@ def preprocessar_encoder(df: pd.DataFrame) -> pd.DataFrame:
     
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-    y_scaler = StandardScaler()
+    from sklearn.preprocessing import PowerTransformer
+    y_scaler = PowerTransformer(method='yeo-johnson')
     y_train_scaled = y_scaler.fit_transform(y_train)
     y_test_scaled = y_scaler.transform(y_test)
     
-    features_numericas = ['espessura', 'diametro_base', 'angulo', 'nariz', 'abertura_raiz', 'pre_aquecimento', 'temperatura_interpasse', 'diametro_arame', 'vazao_gas_tocha', 'vazao_gas_purga', 'material_base_freq', 'material_adicao_freq']
+    features_numericas = ['espessura', 'diametro_base', 'angulo', 'nariz', 'abertura_raiz', 'pre_aquecimento', 'temperatura_interpasse', 'diametro_arame', 'vazao_gas_tocha', 'vazao_gas_purga']
     features_gases = ["tocha_AR", "tocha_CO2", "tocha_O2", "tocha_N2", "tocha_SemGas","purga_AR", "purga_CO2", "purga_O2", "purga_N2", "purga_SemGas"]
     features_onehot = ['tipo_peca', 'passe', 'goivagem', 'cobre_junta', 'polaridade', 'progressao', 'processo', 'normas_referencia', 'tipo_chanfro', 'posicao_peca', 'limpeza', 'pnumber']
     
@@ -111,17 +112,14 @@ def salvar_dados_como_tensores(resultados_preprocessamento: tuple, nome_base_arq
     """
     BASE_DIR = Path(__file__).resolve().parents[2]
     (X_train_num_cat, X_test_num_cat, X_train_emb_base, X_test_emb_base, X_train_emb_add, X_test_emb_add, y_train, y_test, preprocessor, tokens, y_scaler) = resultados_preprocessamento
-    X_train_freqs_arr = X_train_num_cat[:, -2:]
-    X_test_freqs_arr = X_test_num_cat[:, -2:]
+
 
     X_train_num_limpo = X_train_num_cat[:, :-2]
     X_test_num_limpo = X_test_num_cat[:, :-2]
 
     X_train_num_tensor = torch.tensor(X_train_num_limpo, dtype=torch.float32)
     X_test_num_tensor = torch.tensor(X_test_num_limpo, dtype=torch.float32)
-    
-    X_train_freqs_tensor = torch.tensor(X_train_freqs_arr, dtype=torch.float32)
-    X_test_freqs_tensor = torch.tensor(X_test_freqs_arr, dtype=torch.float32)
+
     
     y_train_tensor = torch.tensor(y_train, dtype=torch.float32)
     y_test_tensor = torch.tensor(y_test, dtype=torch.float32)
@@ -142,7 +140,6 @@ def salvar_dados_como_tensores(resultados_preprocessamento: tuple, nome_base_arq
 
     torch.save({
         'X_train_num': X_train_num_tensor, 'X_test_num': X_test_num_tensor,
-        'X_train_freqs': X_train_freqs_tensor, 'X_test_freqs': X_test_freqs_tensor,
         'X_train_emb_base': X_train_emb_base_tensor, 'X_test_emb_base': X_test_emb_base_tensor,
         'X_train_emb_add': X_train_emb_add_tensor, 'X_test_emb_add': X_test_emb_add_tensor,
         'y_train': y_train_tensor, 'y_test': y_test_tensor
