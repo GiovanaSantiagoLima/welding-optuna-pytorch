@@ -90,13 +90,12 @@ def treinar_cv(
 
     batch_size = params.get("batch_size", 32)
     dataloaders_folds = data_loader_cross_validation(data_path, batch_size=batch_size, k_folds=k_folds)
-    (x_num, x_freqs, x_base, x_add), _ = next(iter(dataloaders_folds[0][0]))
+    (x_num,  x_base, x_add), _ = next(iter(dataloaders_folds[0][0]))
     num_features = x_num.shape[1]
     
     dados = torch.load(data_path, weights_only=True)
 
-    # Pesos das saídas: [voltagem=1.0, amperagem=1.0, velocidade=4.0]
-    pesos_loss = torch.tensor([0.2, 0.3, 0.5], device=dev)
+    pesos_loss = torch.tensor([0.05, 0.15, 0.8], device=dev)
 
     metricas_folds = []
     melhor_mse_absoluto = float("inf")
@@ -145,11 +144,11 @@ def treinar_cv(
         for epoca in range(1, epochs + 1):
             # — Treino —
             modelo.train()
-            for (x_num, x_freqs, x_base, x_add), y_batch in loader_treino:
-                x_num, x_freqs, x_base, x_add, y_batch = x_num.to(dev), x_freqs.to(dev), x_base.to(dev), x_add.to(dev), y_batch.to(dev)
+            for (x_num, x_base, x_add), y_batch in loader_treino:
+                x_num, x_base, x_add, y_batch = x_num.to(dev), x_base.to(dev), x_add.to(dev), y_batch.to(dev)
 
                 optimizer.zero_grad()
-                pred = modelo(x_num, x_freqs, x_base, x_add)
+                pred = modelo(x_num, x_base, x_add)
                 
                 # --- LOSS PONDERADA ENXUTA ---
                 loss_por_variavel = criterion_base(pred, y_batch).mean(dim=0)
@@ -163,9 +162,9 @@ def treinar_cv(
             modelo.eval()
             all_preds, all_targets = [], []
             with torch.no_grad():
-                for (x_num_val, x_freqs_val, x_base_val, x_add_val), y_batch_val in loader_val:
-                    x_num_val, x_freqs_val, x_base_val, x_add_val, y_batch_val = x_num_val.to(dev), x_freqs_val.to(dev), x_base_val.to(dev), x_add_val.to(dev), y_batch_val.to(dev)
-                    all_preds.append(modelo(x_num_val, x_freqs_val, x_base_val, x_add_val))
+                for (x_num_val, x_base_val, x_add_val), y_batch_val in loader_val:
+                    x_num_val, x_base_val, x_add_val, y_batch_val = x_num_val.to(dev), x_base_val.to(dev), x_add_val.to(dev), y_batch_val.to(dev)
+                    all_preds.append(modelo(x_num_val, x_base_val, x_add_val))
                     all_targets.append(y_batch_val)
 
             all_preds = torch.cat(all_preds)
@@ -182,8 +181,7 @@ def treinar_cv(
                 if best_val_mse < melhor_mse_absoluto:
                     melhor_mse_absoluto = best_val_mse
                     melhor_modelo_pesos = copy.deepcopy(modelo.state_dict())
-                    # CORRIGIDO: Incluídos os 4 tensores na ordem exata do forward
-                    melhores_entradas_dummy = (x_num_val[[0]], x_freqs_val[[0]], x_base_val[[0]], x_add_val[[0]])
+                    melhores_entradas_dummy = (x_num_val[[0]], x_base_val[[0]], x_add_val[[0]])
             else:
                 epochs_sem_melhora += 1
                 if epochs_sem_melhora >= patience:
@@ -213,12 +211,11 @@ def treinar_cv(
             melhores_entradas_dummy, 
             buffer_memoria,  
             export_params=True,
-            input_names=['x_num', 'x_freqs', 'x_material_base', 'x_material_add'], 
+            input_names=['x_num', 'x_material_base', 'x_material_add'], 
             output_names=["outputs"], 
             dynamo=False,
             dynamic_axes={
                 "x_num": {0: "batch_size"},
-                "x_freqs": {0: "batch_size"},
                 "x_material_base": {0: "batch_size"},
                 "x_material_add": {0: "batch_size"},
                 "outputs": {0: "batch_size"}
