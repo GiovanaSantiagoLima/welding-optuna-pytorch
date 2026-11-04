@@ -59,7 +59,9 @@ class RedeSoldagem(nn.Module):
 
         self.material_encoder = MaterialNgramEncoder(num_buckets=num_buckets, embed_dim=emb_dim)
 
-        tamanho_entrada = num_features_continuas + emb_dim * 2
+        # Se você adicionar 2 colunas extras (frequência do base + frequência da adição) 
+        # nas features numéricas, o tamanho da entrada aumenta em +2 automaticamente:
+        tamanho_entrada = num_features_continuas + 2 + (emb_dim * 2)
 
         camadas = []
         for _ in range(num_layers):
@@ -72,10 +74,11 @@ class RedeSoldagem(nn.Module):
         self.camadas_ocultas = nn.Sequential(*camadas)
         self.camada_saida = nn.Linear(hidden_size, 3)
 
-    def forward(self, x_num_cat: torch.Tensor, x_material_base: torch.Tensor,
-                x_material_add: torch.Tensor) -> torch.Tensor:
+    def forward(self, x_num_cat: torch.Tensor, x_freqs: torch.Tensor, 
+                x_material_base: torch.Tensor, x_material_add: torch.Tensor) -> torch.Tensor:
         """
         x_num_cat:       (batch, num_features_continuas)
+        x_freqs:         (batch, 2) -> [freq_material_base, freq_material_add]
         x_material_base: (batch, MAX_NGRAMS)
         x_material_add:  (batch, MAX_NGRAMS)
         Retorna:         (batch, 3)
@@ -83,6 +86,8 @@ class RedeSoldagem(nn.Module):
         e_b = self.material_encoder(x_material_base)   # (batch, emb_dim)
         e_f = self.material_encoder(x_material_add)    # (batch, emb_dim)
 
-        x = torch.cat([x_num_cat, e_b, e_f], dim=1)
+        # Junta as features contínuas, as frequências explícitas e os embeddings dos n-gramas
+        x = torch.cat([x_num_cat, x_freqs, e_b, e_f], dim=1)
+        
         x = self.camadas_ocultas(x)
         return self.camada_saida(x)

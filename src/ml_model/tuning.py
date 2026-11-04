@@ -3,7 +3,7 @@ import json
 from zipfile import Path
 import optuna
 from dotenv import load_dotenv
-from .train import treinar_cv, treino, imprimir_metricas, OUTPUT_NAMES
+from .train import treinar_cv, imprimir_metricas, OUTPUT_NAMES
 
 load_dotenv()
 RAIZ_PROJETO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -40,24 +40,24 @@ def objective(trial: optuna.Trial) -> float:
         data_path=DATA_PATH,
         epochs=epochs_,
         patience=patience_,
-        k_folds=3,           
+        k_folds=5,           
         exportar_onnx=False  
     )
-    return resultado["best_val_r2"]  # Minimizar MSE e maximizar R2
+    return resultado["best_val_r2"], resultado["best_val_mse"]  # Minimizar MSE e maximizar R2
 
 
 def rodar_estudo():
     """Cria ou continua o estudo Optuna e salva os resultados."""
 
     study = optuna.create_study(
-        direction="maximize",  # Maximizar R2
+        directions=["maximize", "minimize"],  # Maximizar R2 e minimizar MSE
         sampler=optuna.samplers.TPESampler(seed=42),
         pruner=optuna.pruners.MedianPruner(n_warmup_steps=10),
     )
     study.optimize(objective, n_trials=ntrials_, show_progress_bar=True, gc_after_trial=True)
 
     melhores_trials = study.best_trials
-    melhor = max(melhores_trials, key=lambda t: t.values)  # Escolhe o trial com o melhor R2
+    melhor = max(melhores_trials, key=lambda t: t.values[0])  # Escolhe o trial com o melhor R2
 
     # — Cabeçalho —
     print(f"  MELHOR TRIAL: #{melhor.number}")
@@ -69,7 +69,7 @@ def rodar_estudo():
 
     # Métricas detalhadas do melhor trial 
     print(f"\n  Calculando métricas detalhadas do melhor trial...")
-    resultado_melhor = treino(
+    resultado_melhor = treinar_cv(
         params=melhor.params,
         data_path=DATA_PATH,
         epochs=epochs_,
@@ -135,7 +135,7 @@ def treinar_modelo_final(json_path: str = "melhor_trial.json"):
         data_path=DATA_PATH,
         epochs=100,        
         patience=30,       
-        k_folds=3,         
+        k_folds=5,         
         exportar_onnx=True,
         onnx_path="melhor_modelo_producao.onnx"
     )
