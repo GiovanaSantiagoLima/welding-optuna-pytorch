@@ -6,23 +6,30 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 import copy
-from dataset import criar_dataloaders,data_loader_cross_validation
-from model import RedeSoldagem
+from .dataset import data_loader_cross_validation
+from .model import RedeSoldagem
 
 OUTPUT_NAMES = ["voltagem", "amperagem", "velocidade"]
 
 
-def calcular_metricas(preds: torch.Tensor, targets: torch.Tensor) -> dict:
+def calcular_metricas(
+    preds: torch.Tensor, 
+    targets: torch.Tensor, 
+    pesos: list[float] | tuple[float, ...] | None = None
+) -> dict:
     """
-    Calcula MSE, MAE e R² global e por output (voltagem, amperagem, velocidade).
+    Calcula MSE, MAE e R² global (média simples), ponderado e por output (voltagem, amperagem, velocidade).
 
     preds / targets : (N, 3)
-    Retorna dict com chaves:
-        mse, mae, r2                          ← média global
-        mse_voltagem, mae_voltagem, r2_voltagem
-        mse_amperagem, mae_amperagem, r2_amperagem
-        mse_velocidade, mae_velocidade, r2_velocidade
+    pesos           : sequência de 3 floats correspondentes a [voltagem, amperagem, velocidade].
+                      Se None, usa pesos iguais [1.0, 1.0, 1.0].
     """
+    if pesos is None:
+        pesos = [1.0] * len(OUTPUT_NAMES)
+    
+    pesos_arr = np.array(pesos, dtype=float)
+    pesos_norm = pesos_arr / pesos_arr.sum()  # Garante que a soma dos pesos seja 1.0
+
     result = {}
 
     # — Por output —
@@ -38,10 +45,15 @@ def calcular_metricas(preds: torch.Tensor, targets: torch.Tensor) -> dict:
         result[f"mae_{nome}"] = mae
         result[f"r2_{nome}"]  = r2
 
-    # — Global (média dos 3 outputs) —
+    # — Global (média simples dos 3 outputs) —
     result["mse"] = float(np.mean([result[f"mse_{n}"] for n in OUTPUT_NAMES]))
     result["mae"] = float(np.mean([result[f"mae_{n}"] for n in OUTPUT_NAMES]))
     result["r2"]  = float(np.mean([result[f"r2_{n}"]  for n in OUTPUT_NAMES]))
+
+    # — Global Ponderado —
+    result["mse_ponderado"] = float(np.average([result[f"mse_{n}"] for n in OUTPUT_NAMES], weights=pesos_norm))
+    result["mae_ponderado"] = float(np.average([result[f"mae_{n}"] for n in OUTPUT_NAMES], weights=pesos_norm))
+    result["r2_ponderado"]  = float(np.average([result[f"r2_{n}"]  for n in OUTPUT_NAMES], weights=pesos_norm))
 
     return result
 
@@ -69,188 +81,6 @@ def imprimir_metricas(metricas: dict, prefixo: str = "") -> None:
     print(f"{prefixo}{sep}\n")
 
 
-def treino(params: dict, data_path: str, epochs: int = 100, patience: int = 10, device: str | None = None) -> dict:
-    """
-    Treina o RedeSoldagem com os hiperparâmetros fornecidos.
-
-    Parâmetros
-    ----------
-    params : dict
-        Hiperparâmetros do modelo e do otimizador. Esperados:
-            - hidden_size       (int)
-            - num_layers        (int)
-            - dropout_rate      (float)
-            - learning_rate     (float)
-            - batch_size        (int)
-            - weight_decay      (float)   ← opcional, default 1e-4
-            - optimizer         (str)     ← 'Adam' | 'AdamW' | 'SGD' | 'RMSprop', default 'AdamW'
-            - activation        (str)     ← 'relu' | 'gelu' | 'silu', default 'relu'
-            - criterion         (str)     ← 'MSELoss' | 'L1Loss' | 'HuberLoss', default 'MSELoss'
-
-    data_path : str
-        Caminho para o arquivo .pt com os tensores pré-processados.
-    epochs : int
-        Número máximo de épocas.
-    patience : int
-        Épocas sem melhora antes de parar (early stopping).
-    device : str | None
-        'cuda', 'cpu', ou None para detecção automática.
-
-    Retorna
-    -------
-    dict com métricas globais e por output:
-        best_val_mse, best_val_mae, best_val_r2
-        best_val_mse_voltagem,  best_val_mae_voltagem,  best_val_r2_voltagem
-        best_val_mse_amperagem, best_val_mae_amperagem, best_val_r2_amperagem
-        best_val_mse_velocidade,best_val_mae_velocidade,best_val_r2_velocidade
-        stopped_epoch, hist_train, hist_val
-    """
-
-    # Dispositivo
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    dev = torch.device(device)
-    print(f"[train] Dispositivo: {dev}")
-
-    # DataLoaders
-    batch_size = params.get("batch_size", 32)
-    loader_treino, loader_val = criar_dataloaders(data_path, batch_size=batch_size)
-    
-    # CORREÇÃO: Desempacotando apenas a entrada única e o y_batch (_)
-    x_num, _ = next(iter(loader_treino))
-    num_features = x_num.shape[1]
-    
-    # Modelo
-    # CORREÇÃO: Removido o argumento 'emb_dim'
-    modelo = RedeSoldagem(
-        num_features_continuas=num_features,
-        hidden_size=params["hidden_size"],
-        num_layers=params["num_layers"],
-        dropout_rate=params["dropout_rate"],
-    ).to(dev)
-
-    # Otimizador
-    opt_name = params.get("optimizer", "AdamW")
-    if opt_name == "AdamW":
-        optimizer = optim.AdamW(modelo.parameters(), lr=params["learning_rate"], weight_decay=params["weight_decay"])
-    elif opt_name == "Adam":
-        optimizer = optim.Adam(modelo.parameters(), lr=params["learning_rate"], weight_decay=params["weight_decay"])
-    elif opt_name == "SGD":
-        optimizer = optim.SGD(modelo.parameters(), lr=params["learning_rate"], weight_decay=params["weight_decay"])
-    elif opt_name == "RMSprop":
-        optimizer = optim.RMSprop(modelo.parameters(), lr=params["learning_rate"], weight_decay=params["weight_decay"])
-
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=max(5, patience // 4))
-
-    # Critério
-    criterion_name = params.get("criterion", "MSELoss")
-    if criterion_name == "MSELoss":
-        criterion = nn.MSELoss()
-    elif criterion_name == "HuberLoss":
-        criterion = nn.HuberLoss()
-    elif criterion_name == "L1Loss":
-        criterion = nn.L1Loss()
-
-    # Loop de treino
-    hist_train: list[float] = []
-    hist_val:   list[float] = []
-
-    best_val_mse       = float("inf")
-    best_metricas      = None
-    epochs_sem_melhora = 0
-    stopped_epoch      = epochs
-
-    for epoca in range(1, epochs + 1):
-        # — Treino —
-        modelo.train()
-        losses_batch = []
-        
-        # CORREÇÃO: Desempacotando apenas as features (x_num) e o alvo (y_batch)
-        for x_num, y_batch in loader_treino:
-            x_num   = x_num.to(dev)
-            y_batch = y_batch.to(dev)
-
-            optimizer.zero_grad()
-            # CORREÇÃO: Passando apenas x_num para o modelo
-            pred = modelo(x_num)
-            loss = criterion(pred, y_batch)
-            loss.backward()
-            nn.utils.clip_grad_norm_(modelo.parameters(), max_norm=1.0)
-            optimizer.step()
-            losses_batch.append(loss.item())
-
-        train_loss = float(np.mean(losses_batch))
-        hist_train.append(train_loss)
-
-        # — Validação —
-        modelo.eval()
-        all_preds   = []
-        all_targets = []
-        with torch.no_grad():
-            # CORREÇÃO: Desempacotando apenas as features (x_num) e o alvo (y_batch)
-            for x_num, y_batch in loader_val:
-                x_num   = x_num.to(dev)
-                y_batch = y_batch.to(dev)
-                # CORREÇÃO: Passando apenas x_num para o modelo
-                all_preds.append(modelo(x_num))
-                all_targets.append(y_batch)
-
-        all_preds   = torch.cat(all_preds)
-        all_targets = torch.cat(all_targets)
-        metricas    = calcular_metricas(all_preds, all_targets)
-
-        hist_val.append(metricas["mse"])
-        scheduler.step(metricas["mse"])
-
-        # — Log a cada 10 épocas —
-        if epoca % 10 == 0:
-            lr_atual = optimizer.param_groups[0]["lr"]
-            print(
-                f"  Época {epoca:>4}/{epochs} | "
-                f"Train Loss: {train_loss:.4f} | "
-                f"Val MSE: {metricas['mse']:.4f} | "
-                f"Val MAE: {metricas['mae']:.4f} | "
-                f"Val R²: {metricas['r2']:.4f} | "
-                f"LR: {lr_atual:.2e}"
-            )
-
-        # — Early stopping (baseado no MSE global de validação) —
-        if metricas["mse"] < best_val_mse:
-            best_val_mse  = metricas["mse"]
-            best_metricas = metricas
-            epochs_sem_melhora = 0
-        else:
-            epochs_sem_melhora += 1
-            if epochs_sem_melhora >= patience:
-                print(f"  Early stopping na época {epoca}.")
-                stopped_epoch = epoca
-                break
-
-    # — Relatório final —
-    print(f"\n{'=' * 54}")
-    print(f"  MÉTRICAS FINAIS DE VALIDAÇÃO (melhor época)")
-    imprimir_metricas(best_metricas)
-
-    return {
-        # Global
-        "best_val_mse":             best_metricas["mse"],
-        "best_val_mae":             best_metricas["mae"],
-        "best_val_r2":              best_metricas["r2"],
-        # Por output
-        "best_val_mse_voltagem":    best_metricas["mse_voltagem"],
-        "best_val_mae_voltagem":    best_metricas["mae_voltagem"],
-        "best_val_r2_voltagem":     best_metricas["r2_voltagem"],
-        "best_val_mse_amperagem":   best_metricas["mse_amperagem"],
-        "best_val_mae_amperagem":   best_metricas["mae_amperagem"],
-        "best_val_r2_amperagem":    best_metricas["r2_amperagem"],
-        "best_val_mse_velocidade":  best_metricas["mse_velocidade"],
-        "best_val_mae_velocidade":  best_metricas["mae_velocidade"],
-        "best_val_r2_velocidade":   best_metricas["r2_velocidade"],
-        # Histórico
-        "stopped_epoch":            stopped_epoch,
-        "hist_train":               hist_train,
-        "hist_val":                 hist_val,
-    }
 def treinar_cv(
     params: dict, 
     data_path: str, 
@@ -271,13 +101,12 @@ def treinar_cv(
 
     batch_size = params.get("batch_size", 32)
     dataloaders_folds = data_loader_cross_validation(data_path, batch_size=batch_size, k_folds=k_folds)
-    
-    # CORREÇÃO: Desempacotando apenas a entrada única e o y_batch (_)
-    x_num, _ = next(iter(dataloaders_folds[0][0]))
+    (x_num), _ = next(iter(dataloaders_folds[0][0]))
     num_features = x_num.shape[1]
     
-    # Pesos das saídas: [voltagem=1.0, amperagem=1.0, velocidade=2.0]
-    pesos_loss = torch.tensor([1.0, 1.0, 2.0], device=dev)
+    dados = torch.load(data_path, weights_only=True)
+
+    pesos_loss = torch.tensor([0.05, 0.15, 0.8], device=dev)
 
     metricas_folds = []
     melhor_mse_absoluto = float("inf")
@@ -287,12 +116,11 @@ def treinar_cv(
     for fold, (loader_treino, loader_val) in enumerate(dataloaders_folds):
         print(f"\n{'-'*20} INICIANDO FOLD {fold + 1}/{k_folds} {'-'*20}")
         
-        # CORREÇÃO: Removido o argumento 'emb_dim'
         modelo = RedeSoldagem(
             num_features_continuas=num_features,
             hidden_size=params["hidden_size"],
             num_layers=params["num_layers"],
-            dropout_rate=params["dropout_rate"],
+            dropout_rate=params["dropout_rate"]
         ).to(dev)
 
         opt_name = params.get("optimizer", "AdamW")
@@ -323,14 +151,10 @@ def treinar_cv(
         for epoca in range(1, epochs + 1):
             # — Treino —
             modelo.train()
-            
-            # CORREÇÃO: Desempacotando apenas as features (x_num) e o alvo (y_batch)
-            for x_num, y_batch in loader_treino:
-                x_num, y_batch = x_num.to(dev), y_batch.to(dev)
+            for (x_num), y_batch in loader_treino:
+                x_num,  y_batch = x_num.to(dev), y_batch.to(dev)
 
                 optimizer.zero_grad()
-                
-                # CORREÇÃO: Passando apenas x_num para o modelo
                 pred = modelo(x_num)
                 
                 # --- LOSS PONDERADA ENXUTA ---
@@ -345,18 +169,15 @@ def treinar_cv(
             modelo.eval()
             all_preds, all_targets = [], []
             with torch.no_grad():
-                # CORREÇÃO: Removido parênteses extras e desempacotando corretamente
-                for x_num_val, y_batch_val in loader_val:
-                    x_num_val, y_batch_val = x_num_val.to(dev), y_batch_val.to(dev)
-                    
-                    # CORREÇÃO: Passando apenas a feature correta para o modelo
+                for (x_num_val), y_batch_val in loader_val:
+                    x_num_val,  y_batch_val = x_num_val.to(dev), y_batch_val.to(dev)
                     all_preds.append(modelo(x_num_val))
                     all_targets.append(y_batch_val)
 
             all_preds = torch.cat(all_preds)
             all_targets = torch.cat(all_targets)
             
-            metricas = calcular_metricas(all_preds, all_targets)
+            metricas = calcular_metricas(all_preds, all_targets, pesos=params.get("pesos_perda"))
             scheduler.step(metricas["mse"])
 
             if metricas["mse"] < best_val_mse:
@@ -367,8 +188,7 @@ def treinar_cv(
                 if best_val_mse < melhor_mse_absoluto:
                     melhor_mse_absoluto = best_val_mse
                     melhor_modelo_pesos = copy.deepcopy(modelo.state_dict())
-                    # CORREÇÃO: Pegando o shape correto de dummy input retirando o excesso de parênteses
-                    melhores_entradas_dummy = x_num_val[[0]] 
+                    melhores_entradas_dummy = (x_num_val[[0]])
             else:
                 epochs_sem_melhora += 1
                 if epochs_sem_melhora >= patience:
@@ -398,7 +218,7 @@ def treinar_cv(
             melhores_entradas_dummy, 
             buffer_memoria,  
             export_params=True,
-            input_names=["x_num"], 
+            input_names=['x_num'], 
             output_names=["outputs"], 
             dynamo=False,
             dynamic_axes={
@@ -421,6 +241,9 @@ def treinar_cv(
         "best_val_mse":             metricas_medias["mse"],
         "best_val_mae":             metricas_medias["mae"],
         "best_val_r2":              metricas_medias["r2"],
+        "best_val_mse_ponderado":   metricas_medias["mse_ponderado"],
+        "best_val_mae_ponderado":   metricas_medias["mae_ponderado"],
+        "best_val_r2_ponderado":    metricas_medias["r2_ponderado"],
         "best_val_mse_voltagem":    metricas_medias["mse_voltagem"],
         "best_val_mae_voltagem":    metricas_medias["mae_voltagem"],
         "best_val_r2_voltagem":     metricas_medias["r2_voltagem"],
@@ -429,5 +252,5 @@ def treinar_cv(
         "best_val_r2_amperagem":    metricas_medias["r2_amperagem"],
         "best_val_mse_velocidade":  metricas_medias["mse_velocidade"],
         "best_val_mae_velocidade":  metricas_medias["mae_velocidade"],
-        "best_val_r2_velocidade":   metricas_medias["r2_velocidade"]
+        "best_val_r2_velocidade":   metricas_medias["r2_velocidade"],
     }
