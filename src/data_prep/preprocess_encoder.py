@@ -7,7 +7,7 @@ import numpy as np
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import PowerTransformer, StandardScaler, OneHotEncoder
+from sklearn.preprocessing import  OneHotEncoder
 from sklearn.compose import ColumnTransformer
 
 def preprocessar_encoder(df: pd.DataFrame) -> pd.DataFrame:
@@ -17,7 +17,7 @@ def preprocessar_encoder(df: pd.DataFrame) -> pd.DataFrame:
     O pipeline realiza as seguintes etapas:
     1. Separação das features (X) e alvos (y).
     2. Divisão em conjuntos de treino e teste (80/20) para evitar data leakage.
-    3. Aplicação de StandardScaler em variáveis contínuas.
+    3. Aplicação de PowerTransformer em variáveis contínuas.
     4. Manutenção (passthrough) das variáveis de gases que já variam de 0 a 1.
     5. Aplicação de OneHotEncoder em variáveis categóricas de baixa cardinalidade.
     6. Criação de índices inteiros para materiais (base e adição) visando o uso  em camadas de Embedding de Redes Neurais, com tratamento para dados desconhecidos (UNK=0).
@@ -61,7 +61,7 @@ def preprocessar_encoder(df: pd.DataFrame) -> pd.DataFrame:
 
     preprocessor = ColumnTransformer( 
     transformers=[
-        ('num', StandardScaler(), features_numericas),
+        ('num', PowerTransformer(method='yeo-johnson'), features_numericas),
         ('gases', gases_pipeline, features_gases),
         ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False), features_onehot)
     ],
@@ -69,6 +69,9 @@ def preprocessar_encoder(df: pd.DataFrame) -> pd.DataFrame:
 )
     X_train_num_cat = preprocessor.fit_transform(X_train)
     X_test_num_cat = preprocessor.transform(X_test)
+    n_esperado = len(preprocessor.get_feature_names_out())
+    assert X_train_num_cat.shape[1] == n_esperado == 78, (
+    f"Esperado {n_esperado} colunas, obtido {X_train_num_cat.shape[1]}")
     
     #Tratamento para Embeddings (Alta Cardinalidade)
     NGRAM_SIZES = (1,2)   # tamanhos dos n-gramas
