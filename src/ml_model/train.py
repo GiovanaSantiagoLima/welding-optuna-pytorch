@@ -13,17 +13,24 @@ from .model import RedeSoldagem
 OUTPUT_NAMES = ["voltagem", "amperagem", "velocidade"]
 
 
-def calcular_metricas(preds: torch.Tensor, targets: torch.Tensor) -> dict:
+def calcular_metricas(
+    preds: torch.Tensor, 
+    targets: torch.Tensor, 
+    pesos: list[float] | tuple[float, ...] | None = None
+) -> dict:
     """
-    Calcula MSE, MAE e R² global e por output (voltagem, amperagem, velocidade).
+    Calcula MSE, MAE e R² global (média simples), ponderado e por output (voltagem, amperagem, velocidade).
 
     preds / targets : (N, 3)
-    Retorna dict com chaves:
-        mse, mae, r2                          ← média global
-        mse_voltagem, mae_voltagem, r2_voltagem
-        mse_amperagem, mae_amperagem, r2_amperagem
-        mse_velocidade, mae_velocidade, r2_velocidade
+    pesos           : sequência de 3 floats correspondentes a [voltagem, amperagem, velocidade].
+                      Se None, usa pesos iguais [1.0, 1.0, 1.0].
     """
+    if pesos is None:
+        pesos = [1.0] * len(OUTPUT_NAMES)
+    
+    pesos_arr = np.array(pesos, dtype=float)
+    pesos_norm = pesos_arr / pesos_arr.sum()  # Garante que a soma dos pesos seja 1.0
+
     result = {}
 
     # — Por output —
@@ -39,10 +46,15 @@ def calcular_metricas(preds: torch.Tensor, targets: torch.Tensor) -> dict:
         result[f"mae_{nome}"] = mae
         result[f"r2_{nome}"]  = r2
 
-    # — Global (média dos 3 outputs) —
+    # — Global (média simples dos 3 outputs) —
     result["mse"] = float(np.mean([result[f"mse_{n}"] for n in OUTPUT_NAMES]))
     result["mae"] = float(np.mean([result[f"mae_{n}"] for n in OUTPUT_NAMES]))
     result["r2"]  = float(np.mean([result[f"r2_{n}"]  for n in OUTPUT_NAMES]))
+
+    # — Global Ponderado —
+    result["mse_ponderado"] = float(np.average([result[f"mse_{n}"] for n in OUTPUT_NAMES], weights=pesos_norm))
+    result["mae_ponderado"] = float(np.average([result[f"mae_{n}"] for n in OUTPUT_NAMES], weights=pesos_norm))
+    result["r2_ponderado"]  = float(np.average([result[f"r2_{n}"]  for n in OUTPUT_NAMES], weights=pesos_norm))
 
     return result
 
@@ -170,7 +182,7 @@ def treinar_cv(
             all_preds = torch.cat(all_preds)
             all_targets = torch.cat(all_targets)
             
-            metricas = calcular_metricas(all_preds, all_targets)
+            metricas = calcular_metricas(all_preds, all_targets, pesos=params.get("pesos_perda"))
             scheduler.step(metricas["mse"])
 
             if metricas["mse"] < best_val_mse:
@@ -236,6 +248,9 @@ def treinar_cv(
         "best_val_mse":             metricas_medias["mse"],
         "best_val_mae":             metricas_medias["mae"],
         "best_val_r2":              metricas_medias["r2"],
+        "best_val_mse_ponderado":   metricas_medias["mse_ponderado"],
+        "best_val_mae_ponderado":   metricas_medias["mae_ponderado"],
+        "best_val_r2_ponderado":    metricas_medias["r2_ponderado"],
         "best_val_mse_voltagem":    metricas_medias["mse_voltagem"],
         "best_val_mae_voltagem":    metricas_medias["mae_voltagem"],
         "best_val_r2_voltagem":     metricas_medias["r2_voltagem"],
@@ -244,5 +259,5 @@ def treinar_cv(
         "best_val_r2_amperagem":    metricas_medias["r2_amperagem"],
         "best_val_mse_velocidade":  metricas_medias["mse_velocidade"],
         "best_val_mae_velocidade":  metricas_medias["mae_velocidade"],
-        "best_val_r2_velocidade":   metricas_medias["r2_velocidade"]
+        "best_val_r2_velocidade":   metricas_medias["r2_velocidade"],
     }
